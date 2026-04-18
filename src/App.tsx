@@ -16,6 +16,8 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [geminiKey, setGeminiKey] = useState("");
   const [elevenLabsKey, setElevenLabsKey] = useState("");
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("21m00Tcm4TlvDq8ikWAM");
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -190,6 +192,10 @@ export default function App() {
       
       dispatchToConstellation({ type: "pipeline_end", ts: 4300 });
       setStatus("done");
+
+      if (isVoiceEnabled && elevenLabsKey) {
+        synthesizeSpeech(responseText);
+      }
     } catch (error) {
       console.error(error);
       dispatchToConstellation({ type: "pipeline_error", ts: 0, error: String(error) });
@@ -237,6 +243,30 @@ export default function App() {
     }
   };
 
+  const synthesizeSpeech = async (text: string) => {
+    if (!elevenLabsKey) return;
+    try {
+      dispatchToConstellation({ type: "voice_start", ts: Date.now(), status: "synthesizing" });
+      const resp = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          apiKey: elevenLabsKey,
+          voiceId: elevenLabsVoiceId
+        })
+      });
+      if (!resp.ok) throw new Error('TTS Failed');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play();
+      dispatchToConstellation({ type: "voice_complete", ts: Date.now() });
+    } catch (err) {
+      console.error("TTS Error:", err);
+    }
+  };
+
   // Listen for the iframe and auth messages
   useEffect(() => {
     const handleEvents = (event: MessageEvent) => {
@@ -274,8 +304,16 @@ export default function App() {
         <div className="flex flex-col gap-2">
           <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-1">Core Identity</div>
           <StatRow label="status" value={status} color={status === 'done' ? '#00ff41' : status === 'thinking' ? '#ff7eb9' : '#6b6b7a'} />
-          <StatRow label="effort" value={stats.effort ? `${stats.effort}/10` : "—"} />
           <StatRow label="emotion" value={stats.emotion || "—"} />
+          <div className="flex justify-between items-center text-[11px] py-1 border-bottom border-border mb-0.5">
+            <span className="text-text-dim uppercase tracking-tighter">Voice Mode</span>
+            <button 
+              onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
+              className={`w-8 h-4 rounded-full relative transition-colors ${isVoiceEnabled ? 'bg-accent' : 'bg-border'}`}
+            >
+              <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isVoiceEnabled ? 'left-4.5' : 'left-0.5'}`} />
+            </button>
+          </div>
           <StatRow label="latency" value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : "—"} />
           <StatRow label="tokens" value={stats.tokens || "—"} />
         </div>
@@ -468,6 +506,13 @@ export default function App() {
                     className="bg-black border border-border text-[9px] px-2 py-1 outline-none focus:border-accent transition-colors"
                     value={elevenLabsKey}
                     onChange={(e) => setElevenLabsKey(e.target.value)}
+                  />
+                  <input 
+                    type="text" 
+                    placeholder="VOICE_ID_REF..."
+                    className="bg-black border border-border text-[9px] px-2 py-1 outline-none focus:border-accent transition-colors mt-1"
+                    value={elevenLabsVoiceId}
+                    onChange={(e) => setElevenLabsVoiceId(e.target.value)}
                   />
                 </div>
                 <button 
