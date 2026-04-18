@@ -1,0 +1,10 @@
+{
+  "id": "monika-constellation",
+  "name": "Monika Constellation",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Chat with the Monika agent swarm from inside Obsidian. Live multi-agent constellation view.",
+  "author": "Seth",
+  "authorUrl": "https://github.com/shihabelal/just-monika",
+  "isDesktopOnly": false
+}

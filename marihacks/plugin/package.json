@@ -1,0 +1,22 @@
+{
+  "name": "monika-constellation",
+  "version": "0.1.0",
+  "description": "Monika agent swarm + constellation view for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "check": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "Seth",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.20.2",
+    "obsidian": "^1.5.7",
+    "tslib": "2.6.2",
+    "typescript": "5.4.5"
+  }
+}

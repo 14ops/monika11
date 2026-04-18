@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Monika Constellation - live view</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --user:  #ff7eb9;
+    --reas:  #ffb3d6;
+    --emo:   #d47eff;
+    --mon:   #ff7eb9;
+    --mem:   #7e9cff;
+    --bg:    #0a0a0c;
+    --panel: #111114;
+    --line:  #2a2a30;
+    --text:  #e0e0e6;
+    --dim:   #6b6b7a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: "JetBrains Mono", "Fira Code", ui-monospace, Menlo, monospace;
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* side panels */
+  .hud {
+    position: fixed; top: 0; bottom: 0;
+    width: 360px; background: var(--panel);
+    backdrop-filter: blur(12px);
+    border-right: 1px solid var(--line);
+    padding: 18px 18px 0 18px;
+    display: flex; flex-direction: column; gap: 14px;
+    z-index: 10;
+  }
+  .hud.right { left: auto; right: 0; border-right: none; border-left: 1px solid var(--line); }
+  .hud.left  { left: 0; }
+
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 600; letter-spacing: 0.04em;
+  }
+  .brand .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: radial-gradient(circle, #fff, #ffd36b 60%, transparent);
+    box-shadow: 0 0 16px #ffd36b, 0 0 32px #ffaa3366;
+  }
+  .tag { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.12em; }
+
+  .card {
+    background: rgba(20, 24, 44, 0.5);
+    border: 1px solid rgba(140, 160, 230, 0.08);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat-row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  .stat-row .k { color: var(--dim); }
+  .stat-row .v { color: var(--text); font-variant-numeric: tabular-nums; }
+
+  .agents { display: grid; gap: 8px; }
+  .agent {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 8px;
+    background: rgba(20, 24, 44, 0.4);
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+    border: 1px solid transparent;
+  }
+  .agent.active {
+    background: rgba(60, 70, 110, 0.35);
+    box-shadow: 0 0 18px currentColor;
+    border-color: currentColor;
+  }
+  .agent .pip {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+    flex-shrink: 0;
+  }
+  .agent .name { font-size: 13px; flex: 1; color: var(--text); }
+  .agent .meta { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  .log {
+    flex: 1; overflow-y: auto; font-size: 11px;
+    line-height: 1.55; padding-right: 4px;
+  }
+  .log::-webkit-scrollbar { width: 6px; }
+  .log::-webkit-scrollbar-thumb { background: rgba(140, 160, 230, 0.2); border-radius: 3px; }
+  .log .row { padding: 4px 0; border-bottom: 1px solid rgba(140,160,230,0.04); }
+  .log .t { color: var(--dim); margin-right: 6px; }
+  .log .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; margin-right: 6px;
+    background: rgba(140,160,230,0.12); color: var(--text);
+  }
+  .log .user    { background: rgba(93,227,255,0.15);  color: var(--user); }
+  .log .reas    { background: rgba(255,107,92,0.15);  color: var(--reas); }
+  .log .emo     { background: rgba(255,116,210,0.15); color: var(--emo); }
+  .log .mon     { background: rgba(255,211,107,0.15); color: var(--mon); }
+  .log .mem     { background: rgba(181,140,255,0.15); color: var(--mem); }
+  .log .sys     { background: rgba(140,160,230,0.12); color: #9aa8d4; }
+
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 12px; cursor: pointer;
+    background: rgba(140, 160, 230, 0.1); color: var(--text);
+    border: 1px solid rgba(140, 160, 230, 0.2); border-radius: 8px;
+    padding: 8px 12px;
+  }
+  button:hover { background: rgba(140, 160, 230, 0.2); }
+  button.primary { background: rgba(255,211,107,0.15); border-color: #ffd36b88; color: #ffd36b; }
+  button.primary:hover { background: rgba(255,211,107,0.25); }
+
+  .chat {
+    display: flex; flex-direction: column; gap: 8px; font-size: 12px;
+  }
+  .chat .bubble {
+    background: rgba(20, 24, 44, 0.55);
+    border: 1px solid rgba(140, 160, 230, 0.08);
+    padding: 10px 12px; border-radius: 10px;
+    line-height: 1.5; max-width: 100%;
+  }
+  .chat .bubble.u { border-left: 2px solid var(--user); }
+  .chat .bubble.a { border-left: 2px solid var(--mon); }
+  .chat .meta-line { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+
+  .memory-hits { display: grid; gap: 6px; }
+  .memory-hits .hit {
+    font-size: 11px; padding: 8px 10px; border-radius: 8px;
+    background: rgba(181,140,255,0.06);
+    border: 1px solid rgba(181,140,255,0.14);
+    line-height: 1.45;
+  }
+  .memory-hits .hit .title { color: var(--mem); font-weight: 600; }
+  .memory-hits .hit .dist { float: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .memory-hits .hit .prev { color: var(--dim); margin-top: 3px; }
+
+  .mini { font-size: 10px; color: var(--dim); letter-spacing: 0.1em; text-transform: uppercase; }
+  .bottom-bar {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); backdrop-filter: blur(10px);
+    padding: 8px 14px; border-radius: 999px;
+    border: 1px solid rgba(140, 160, 230, 0.15);
+    font-size: 11px; color: var(--dim);
+    display: flex; gap: 12px; align-items: center; z-index: 10;
+  }
+  .bottom-bar .sep { color: rgba(140,160,230,0.25); }
+</style>
+</head>
+<body>
+
+<div id="stage"><canvas id="cnv"></canvas></div>
+
+<!-- LEFT HUD -->
+<div class="hud left">
+  <div class="brand">
+    <div class="dot"></div>
+    <div>MONIKA <span style="color:var(--dim)">· constellation</span></div>
+  </div>
+
+  <div class="card">
+    <div class="tag">pipeline</div>
+    <div class="stat-row"><span class="k">status</span><span class="v" id="s-status">idle</span></div>
+    <div class="stat-row"><span class="k">effort</span><span class="v" id="s-effort">—</span></div>
+    <div class="stat-row"><span class="k">emotion</span><span class="v" id="s-emotion">—</span></div>
+    <div class="stat-row"><span class="k">latency</span><span class="v" id="s-latency">—</span></div>
+    <div class="stat-row"><span class="k">tokens</span><span class="v" id="s-tokens">—</span></div>
+  </div>
+
+  <div class="tag">agents</div>
+  <div class="agents" id="agent-list">
+    <div class="agent" data-id="user"                style="color: var(--user);"><div class="pip"></div><div class="name">you</div><div class="meta" id="m-user"></div></div>
+    <div class="agent" data-id="reasoning_validator" style="color: var(--reas);"><div class="pip"></div><div class="name">reasoning_validator</div><div class="meta" id="m-reasoning_validator"></div></div>
+    <div class="agent" data-id="emotion_classifier"  style="color: var(--emo);"><div class="pip"></div><div class="name">emotion_classifier</div><div class="meta" id="m-emotion_classifier"></div></div>
+    <div class="agent" data-id="monika_persona"      style="color: var(--mon);"><div class="pip"></div><div class="name">monika_persona</div><div class="meta" id="m-monika_persona"></div></div>
+    <div class="agent" data-id="memory"              style="color: var(--mem);"><div class="pip"></div><div class="name">memory_galaxy</div><div class="meta" id="m-memory"></div></div>
+  </div>
+
+  <div class="controls" style="margin-top: auto; padding-bottom: 16px;">
+    <button class="primary" id="btn-replay">▶ replay captured run</button>
+    <button id="btn-live">● connect live</button>
+    <button id="btn-clear">clear</button>
+  </div>
+</div>
+
+<!-- RIGHT HUD -->
+<div class="hud right">
+  <div class="tag">event stream</div>
+  <div class="log" id="log"></div>
+
+  <div class="tag">latest chat</div>
+  <div class="chat" id="chat"></div>
+
+  <div class="tag">memory hits</div>
+  <div class="memory-hits" id="hits"></div>
+  <div style="padding-bottom: 16px"></div>
+</div>
+
+<div class="bottom-bar">
+  <span>speed</span>
+  <span class="sep">|</span>
+  <span id="speed-label">8×</span>
+  <input type="range" id="speed" min="1" max="40" value="8" style="width: 120px" />
+  <span class="sep">|</span>
+  <span id="mode-label">mode: <b style="color:var(--text)">replay</b></span>
+</div>
+
+<script>
+// ============================================================================
+// CAPTURED EVENT STREAM - from a real run of the Monika pipeline
+// ============================================================================
+const CAPTURED_EVENTS = [
+  {"type":"connected","ts":0,"server":"monika-marihacks"},
+  {"type":"user_message","ts":1964,"text":"I keep double counting in my coin change DP. Looped coins in the inner loop. Where am I off?"},
+  {"type":"pipeline_start","ts":1965},
+  {"type":"memory_hit","ts":2278,"title":"Where I am stuck","source":"note","distance":0.2808,"path":"Study log 2026-04-18.md","preview":"Coin change with unlimited supply. I see it is similar to climbing stairs but the order-independence rule is throwing me off."},
+  {"type":"memory_hit","ts":2279,"title":"How it works","source":"note","distance":0.4363,"path":"00 Welcome.md","preview":"Every note is chunked by heading and embedded into Monika's memory."},
+  {"type":"memory_hit","ts":2280,"title":"Where my understanding breaks","source":"note","distance":0.4399,"path":"Recursion.md","preview":"I understand the base case but I keep getting confused on how the stack unwinds."},
+  {"type":"memory_hit","ts":2281,"title":"Base case","source":"note","distance":0.442,"path":"Recursion.md","preview":"The condition that stops the recursion. Without it, the stack overflows."},
+  {"type":"memory_hit","ts":2282,"title":"Try this first","source":"note","distance":0.4513,"path":"00 Welcome.md","preview":"Ask something vague like explain recursion for me. Watch the reasoning validator score drop."},
+  {"type":"agent_start","ts":2283,"agent":"pipeline_run","kind":"pipeline_run"},
+  {"type":"agent_start","ts":2283,"agent":"emotion_classifier","model":"qwen2.5:0.5b","kind":"llm_call"},
+  {"type":"agent_start","ts":2286,"agent":"reasoning_validator","model":"qwen2.5:0.5b","kind":"llm_call"},
+  {"type":"handoff","ts":2500,"from":"user","to":"reasoning_validator"},
+  {"type":"handoff","ts":2500,"from":"user","to":"emotion_classifier"},
+  {"type":"agent_complete","ts":15957,"agent":"emotion_classifier","kind":"llm_call","duration_ms":13674,"input_tokens":222,"output_tokens":45},
+  {"type":"agent_complete","ts":23506,"agent":"reasoning_validator","kind":"llm_call","duration_ms":21219,"input_tokens":368,"output_tokens":33},
+  {"type":"handoff","ts":23600,"from":"reasoning_validator","to":"monika_persona"},
+  {"type":"handoff","ts":23600,"from":"emotion_classifier","to":"monika_persona"},
+  {"type":"handoff","ts":23650,"from":"memory","to":"monika_persona"},
+  {"type":"agent_start","ts":23660,"agent":"monika_persona","model":"qwen2.5:1.5b","kind":"llm_call"},
+  {"type":"agent_complete","ts":88605,"agent":"monika_persona","kind":"llm_call","duration_ms":64945,"input_tokens":669,"output_tokens":217},
+  {"type":"agent_start","ts":88605,"agent":"fact_extractor","model":"qwen2.5:0.5b","kind":"llm_call"},
+  {"type":"agent_complete","ts":96360,"agent":"fact_extractor","kind":"llm_call","duration_ms":7755,"input_tokens":441,"output_tokens":2},
+  {"type":"handoff","ts":96380,"from":"monika_persona","to":"user"},
+  {"type":"assistant_message","ts":96361,"text":"You're close. Looping over the same elements twice is part of your confusion. When you calculate dp[i] for a given remaining amount, the order of your loops decides whether you count combinations or permutations. If coins is the outer loop and amount is the inner loop, you fix a coin and extend every partial sum with it before moving on — that's combinations. If amount is outer and coins inner, you revisit every coin for every amount and end up double-counting (1+2 and 2+1 counted separately). Can you paste the exact nesting you have?","effort_score":7,"emotion":"confused","emotion_confidence":0.78},
+  {"type":"pipeline_end","ts":96362},
+  {"type":"agent_complete","ts":96362,"agent":"pipeline_run","kind":"pipeline_run","duration_ms":94079}
+];
+
+// ============================================================================
+// SCENE: star layouts for each agent/constellation
+// ============================================================================
+const AGENT_COLORS = {
+  user: '#ff7eb9',
+  reasoning_validator: '#ffb3d6',
+  emotion_classifier: '#d47eff',
+  monika_persona: '#ff7eb9',
+  memory: '#7e9cff',
+  fact_extractor: '#ff7e7e',
+  pipeline_run: '#ff7eb9',
+};
+
+// Each constellation: normalized star positions 0..1 across the stage
+// Plus label position and connecting lines between stars in the constellation.
+const CONSTELLATIONS = {
+  user: {
+    label: 'you',
+    anchor: [0.08, 0.88],
+    stars: [[0.08, 0.88]],
+    lines: [],
+  },
+  reasoning_validator: {
+    label: 'reasoning_validator',
+    anchor: [0.24, 0.30],
+    // Orion-belt-esque cluster
+    stars: [
+      [0.18, 0.28], [0.22, 0.32], [0.27, 0.30],
+      [0.20, 0.40], [0.29, 0.40], [0.24, 0.46],
+    ],
+    lines: [[0,1],[1,2],[1,3],[1,4],[3,5],[4,5]],
+  },
+  emotion_classifier: {
+    label: 'emotion_classifier',
+    anchor: [0.78, 0.28],
+    // Cassiopeia zigzag
+    stars: [
+      [0.72, 0.22], [0.76, 0.30], [0.80, 0.22],
+      [0.84, 0.30], [0.88, 0.22],
+    ],
+    lines: [[0,1],[1,2],[2,3],[3,4]],
+  },
+  monika_persona: {
+    label: 'monika_persona',
+    anchor: [0.50, 0.50],
+    // central star + 6 surrounding (hex)
+    stars: [
+      [0.50, 0.50],
+      [0.50, 0.42], [0.57, 0.46], [0.57, 0.54],
+      [0.50, 0.58], [0.43, 0.54], [0.43, 0.46],
+    ],
+    lines: [[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],[1,2],[2,3],[3,4],[4,5],[5,6],[6,1]],
+  },
+  memory: {
+    label: 'memory_galaxy',
+    anchor: [0.52, 0.86],
+    // spiral (computed below)
+    stars: (() => {
+      const pts = [];
+      const cx = 0.52, cy = 0.86;
+      for (let i = 0; i < 18; i++) {
+        const t = i * 0.45;
+        const r = 0.014 + t * 0.008;
+        pts.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r * 0.6]);
+      }
+      return pts;
+    })(),
+    lines: [], // galaxy is a swirl, no connecting lines
+  },
+  fact_extractor: {
+    label: 'fact_extractor',
+    anchor: [0.86, 0.70],
+    stars: [[0.84, 0.68], [0.88, 0.70], [0.86, 0.74]],
+    lines: [[0,1],[1,2],[2,0]],
+  },
+};
+
+// ============================================================================
+// RENDER STATE
+// ============================================================================
+const state = {
+  pulses: {}, // agentId -> intensity 0..1
+  arcs: [],   // {from, to, color, t0, life}
+  particles: [], // {fromXY, toXY, ctrlXY, color, t0, dur}
+  galaxyFlares: [], // {t0, life}
+  starfield: [], // {x,y,size,twinkle}
+  t0: performance.now(),
+};
+
+// Build 220 background stars for parallax twinkle
+for (let i = 0; i < 220; i++) {
+  state.starfield.push({
+    x: Math.random(),
+    y: Math.random(),
+    size: Math.random() * 1.2 + 0.2,
+    phase: Math.random() * Math.PI * 2,
+    freq: 0.4 + Math.random() * 1.6,
+  });
+}
+
+// ============================================================================
+// CANVAS SETUP
+// ============================================================================
+const cnv = document.getElementById('cnv');
+const ctx = cnv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = cnv.clientWidth = window.innerWidth;
+  H = cnv.clientHeight = window.innerHeight;
+  cnv.width = W * DPR;
+  cnv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+resize();
+window.addEventListener('resize', resize);
+
+function N(x, y) { return [x * W, y * H]; }
+
+// ============================================================================
+// HANDLERS — map events to visual effects
+// ============================================================================
+function mapAgent(id) {
+  if (!id) return null;
+  if (id === 'user' || id === 'memory') return id;
+  if (CONSTELLATIONS[id]) return id;
+  return null;
+}
+
+function pulseAgent(id, intensity = 1.0) {
+  const m = mapAgent(id);
+  if (!m) return;
+  state.pulses[m] = Math.max(state.pulses[m] || 0, intensity);
+  // Flip the HUD chip active for a moment
+  const el = document.querySelector(`.agent[data-id="${m}"]`);
+  if (el) {
+    el.classList.add('active');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('active'), 1400);
+  }
+}
+
+function addArc(fromId, toId) {
+  const f = CONSTELLATIONS[fromId], t = CONSTELLATIONS[toId];
+  if (!f || !t) return;
+  const fxy = N(...f.anchor);
+  const txy = N(...t.anchor);
+  // perpendicular bend
+  const mx = (fxy[0] + txy[0]) / 2;
+  const my = (fxy[1] + txy[1]) / 2;
+  const dx = txy[0] - fxy[0], dy = txy[1] - fxy[1];
+  const L = Math.hypot(dx, dy) + 0.001;
+  const cx = mx + (-dy / L) * 60;
+  const cy = my + (dx / L) * 60;
+  const color = AGENT_COLORS[fromId] || '#ffffff';
+  state.arcs.push({ fx: fxy[0], fy: fxy[1], tx: txy[0], ty: txy[1], cx, cy, color, t0: performance.now(), life: 2200 });
+  // spawn a couple of particles along the arc
+  for (let i = 0; i < 4; i++) {
+    state.particles.push({
+      fx: fxy[0], fy: fxy[1], tx: txy[0], ty: txy[1],
+      cx, cy, color,
+      t0: performance.now() + i * 120,
+      dur: 900 + Math.random() * 300,
+    });
+  }
+}
+
+function addMemoryHit(title, distance) {
+  state.galaxyFlares.push({ t0: performance.now(), life: 1800, title, distance });
+  pulseAgent('memory', 0.9);
+}
+
+// ============================================================================
+// EVENT -> VISUAL DISPATCH
+// ============================================================================
+function dispatch(e) {
+  logEvent(e);
+  switch (e.type) {
+    case 'user_message':
+      pulseAgent('user', 1.0);
+      updateChat('u', e.text);
+      document.getElementById('s-status').textContent = 'thinking...';
+      document.getElementById('s-status').style.color = '#ffd36b';
+      break;
+    case 'pipeline_start':
+      setAgentMeta('user', 'asked');
+      break;
+    case 'agent_start':
+      if (e.agent && e.agent !== 'pipeline_run') {
+        pulseAgent(e.agent, 1.0);
+        setAgentMeta(e.agent, 'running...');
+      }
+      break;
+    case 'agent_complete':
+      if (e.agent && e.agent !== 'pipeline_run') {
+        const dur = e.duration_ms ? (e.duration_ms / 1000).toFixed(1) + 's' : '';
+        const toks = e.output_tokens ? `${e.output_tokens}t` : '';
+        setAgentMeta(e.agent, `${dur} · ${toks}`);
+      }
+      break;
+    case 'handoff':
+      addArc(e.from, e.to);
+      break;
+    case 'memory_hit':
+      addMemoryHit(e.title, e.distance);
+      addHit(e);
+      break;
+    case 'assistant_message':
+      pulseAgent('monika_persona', 1.0);
+      addArc('monika_persona', 'user');
+      updateChat('a', e.text, e);
+      document.getElementById('s-effort').textContent = (e.effort_score ?? '—') + '/10';
+      document.getElementById('s-emotion').textContent = e.emotion ?? '—';
+      if (e.effort_score != null) {
+        document.getElementById('s-effort').style.color =
+          e.effort_score >= 6 ? '#7dff8a' : e.effort_score >= 3 ? '#ffd36b' : '#ff6b5c';
+      }
+      break;
+    case 'pipeline_end':
+      document.getElementById('s-status').textContent = 'done';
+      document.getElementById('s-status').style.color = '#7dff8a';
+      break;
+    case 'pipeline_error':
+      document.getElementById('s-status').textContent = 'error';
+      document.getElementById('s-status').style.color = '#ff6b5c';
+      break;
+  }
+}
+
+// ============================================================================
+// HUD UPDATERS
+// ============================================================================
+function setAgentMeta(id, text) {
+  const el = document.getElementById('m-' + id);
+  if (el) el.textContent = text;
+}
+
+function logEvent(e) {
+  const log = document.getElementById('log');
+  const badge = (() => {
+    if (e.type === 'user_message') return 'user';
+    if (e.type === 'memory_hit') return 'mem';
+    if (e.agent === 'reasoning_validator') return 'reas';
+    if (e.agent === 'emotion_classifier') return 'emo';
+    if (e.agent === 'monika_persona' || e.type === 'assistant_message') return 'mon';
+    return 'sys';
+  })();
+  const when = new Date().toLocaleTimeString();
+  const detail = (() => {
+    if (e.type === 'user_message') return e.text.slice(0, 60);
+    if (e.type === 'memory_hit') return `${e.title} (d=${e.distance})`;
+    if (e.type === 'agent_start') return `${e.agent} starting`;
+    if (e.type === 'agent_complete') return `${e.agent} ✓ ${(e.duration_ms/1000).toFixed(1)}s · ${e.output_tokens||0}t`;
+    if (e.type === 'handoff') return `${e.from} → ${e.to}`;
+    if (e.type === 'assistant_message') return 'reply: ' + e.text.slice(0, 60);
+    return e.type;
+  })();
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<span class="t">${when}</span><span class="badge ${badge}">${e.type}</span>${escape(detail)}`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateChat(kind, text, meta) {
+  const chat = document.getElementById('chat');
+  const b = document.createElement('div');
+  b.className = 'bubble ' + kind;
+  b.textContent = text;
+  chat.appendChild(b);
+  if (kind === 'a' && meta) {
+    const m = document.createElement('div');
+    m.className = 'meta-line';
+    m.textContent = `effort ${meta.effort_score}/10 · ${meta.emotion}`;
+    chat.appendChild(m);
+    document.getElementById('s-latency').textContent = '~94s';
+    document.getElementById('s-tokens').textContent = '1997';
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addHit(e) {
+  const box = document.getElementById('hits');
+  const el = document.createElement('div');
+  el.className = 'hit';
+  el.innerHTML = `<span class="dist">d=${e.distance}</span><div class="title">${escape(e.title)}</div><div class="prev">${escape((e.preview||'').slice(0,120))}</div>`;
+  box.appendChild(el);
+}
+
+function escape(s) {
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+// ============================================================================
+// DRAW LOOP
+// ============================================================================
+let lastFrame = performance.now();
+function frame(now) {
+  const dt = now - lastFrame;
+  lastFrame = now;
+  ctx.clearRect(0, 0, W, H);
+  drawBackdrop(now);
+  drawStarfield(now);
+  drawConstellations(now);
+  drawMemoryGalaxy(now);
+  drawArcs(now);
+  drawParticles(now);
+  // Decay pulses
+  for (const k in state.pulses) {
+    state.pulses[k] *= Math.exp(-dt / 650);
+    if (state.pulses[k] < 0.01) delete state.pulses[k];
+  }
+  requestAnimationFrame(frame);
+}
+
+function drawBackdrop(now) {
+  const g = ctx.createRadialGradient(W * 0.5, H * 0.55, 0, W * 0.5, H * 0.55, Math.hypot(W, H) * 0.7);
+  g.addColorStop(0, 'rgba(18, 22, 48, 0.6)');
+  g.addColorStop(0.5, 'rgba(8, 10, 24, 0.8)');
+  g.addColorStop(1, 'rgba(3, 3, 10, 1)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawStarfield(now) {
+  for (const s of state.starfield) {
+    const tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(now * 0.001 * s.freq + s.phase));
+    ctx.globalAlpha = tw * 0.7;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(s.x * W, s.y * H, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawConstellations(now) {
+  for (const [id, c] of Object.entries(CONSTELLATIONS)) {
+    if (id === 'memory') continue; // galaxy drawn separately
+    const color = AGENT_COLORS[id] || '#fff';
+    const pulse = state.pulses[id] || 0;
+
+    // connecting lines
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = hexWithAlpha(color, 0.25 + pulse * 0.5);
+    ctx.beginPath();
+    for (const [a, b] of c.lines) {
+      const [ax, ay] = N(...c.stars[a]);
+      const [bx, by] = N(...c.stars[b]);
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+    }
+    ctx.stroke();
+
+    // stars
+    for (const [sx, sy] of c.stars) {
+      const [x, y] = N(sx, sy);
+      drawStar(x, y, 3 + pulse * 6, color, 0.85 + pulse * 0.15);
+    }
+
+    // label
+    const [lx, ly] = N(...c.anchor);
+    ctx.font = '12px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = hexWithAlpha(color, 0.75 + pulse * 0.25);
+    ctx.fillText(c.label, lx, ly + 56);
+  }
+
+  // user: single bright star
+  const uPulse = state.pulses.user || 0;
+  const [ux, uy] = N(...CONSTELLATIONS.user.anchor);
+  drawStar(ux, uy, 4 + uPulse * 8, AGENT_COLORS.user, 0.9 + uPulse * 0.1);
+  ctx.fillStyle = hexWithAlpha(AGENT_COLORS.user, 0.75 + uPulse * 0.25);
+  ctx.fillText('you', ux, uy + 30);
+}
+
+function drawMemoryGalaxy(now) {
+  const c = CONSTELLATIONS.memory;
+  const color = AGENT_COLORS.memory;
+  const pulse = state.pulses.memory || 0;
+  const [cx, cy] = N(...c.anchor);
+
+  // outer glow
+  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 180);
+  glow.addColorStop(0, hexWithAlpha(color, 0.25 + pulse * 0.4));
+  glow.addColorStop(0.5, hexWithAlpha(color, 0.08 + pulse * 0.15));
+  glow.addColorStop(1, hexWithAlpha(color, 0));
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 180, 0, Math.PI * 2);
+  ctx.fill();
+
+  // spiral stars (rotate slowly)
+  const rot = now * 0.00008;
+  for (let i = 0; i < c.stars.length; i++) {
+    const [sx, sy] = c.stars[i];
+    const dx = sx - c.anchor[0], dy = sy - c.anchor[1];
+    const r = Math.hypot(dx, dy);
+    const a = Math.atan2(dy, dx) + rot;
+    const x = c.anchor[0] + Math.cos(a) * r;
+    const y = c.anchor[1] + Math.sin(a) * r;
+    const [X, Y] = N(x, y);
+    drawStar(X, Y, 2 + pulse * 3, color, 0.7 + pulse * 0.3);
+  }
+
+  // flare rings when memory hits fire
+  state.galaxyFlares = state.galaxyFlares.filter(f => {
+    const age = now - f.t0;
+    if (age > f.life) return false;
+    const p = age / f.life;
+    const r = 10 + p * 160;
+    ctx.strokeStyle = hexWithAlpha(color, (1 - p) * 0.7);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    return true;
+  });
+
+  // label
+  ctx.font = '12px "JetBrains Mono", ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = hexWithAlpha(color, 0.8 + pulse * 0.2);
+  ctx.fillText('memory_galaxy', cx, cy + 100);
+}
+
+function drawArcs(now) {
+  state.arcs = state.arcs.filter(a => {
+    const age = now - a.t0;
+    if (age > a.life) return false;
+    const p = age / a.life;
+    ctx.strokeStyle = hexWithAlpha(a.color, (1 - p) * 0.6);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(a.fx, a.fy);
+    ctx.quadraticCurveTo(a.cx, a.cy, a.tx, a.ty);
+    ctx.stroke();
+    return true;
+  });
+}
+
+function drawParticles(now) {
+  state.particles = state.particles.filter(p => {
+    const age = now - p.t0;
+    if (age < 0) return true;
+    if (age > p.dur) return false;
+    const t = age / p.dur;
+    // quadratic bezier
+    const x = (1 - t) * (1 - t) * p.fx + 2 * (1 - t) * t * p.cx + t * t * p.tx;
+    const y = (1 - t) * (1 - t) * p.fy + 2 * (1 - t) * t * p.cy + t * t * p.ty;
+    ctx.fillStyle = hexWithAlpha(p.color, 1 - t);
+    ctx.beginPath();
+    ctx.arc(x, y, 3 * (1 - t * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+    // glow halo
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 14);
+    g.addColorStop(0, hexWithAlpha(p.color, 0.5 * (1 - t)));
+    g.addColorStop(1, hexWithAlpha(p.color, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    return true;
+  });
+}
+
+function drawStar(x, y, size, color, intensity = 1) {
+  // soft halo
+  const g = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
+  g.addColorStop(0, hexWithAlpha(color, 0.9 * intensity));
+  g.addColorStop(0.4, hexWithAlpha(color, 0.25 * intensity));
+  g.addColorStop(1, hexWithAlpha(color, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, size * 4, 0, Math.PI * 2);
+  ctx.fill();
+  // white core
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(x, y, size * 0.6, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function hexWithAlpha(hex, a) {
+  // #rrggbb -> rgba(r,g,b,a)
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+requestAnimationFrame(frame);
+
+// ============================================================================
+// REPLAY + LIVE MODES
+// ============================================================================
+let replayTimer = null;
+let ws = null;
+
+function clearAll() {
+  state.pulses = {};
+  state.arcs.length = 0;
+  state.particles.length = 0;
+  state.galaxyFlares.length = 0;
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('chat').innerHTML = '';
+  document.getElementById('hits').innerHTML = '';
+  document.querySelectorAll('.agent .meta').forEach(m => m.textContent = '');
+  document.getElementById('s-status').textContent = 'idle';
+  document.getElementById('s-effort').textContent = '—';
+  document.getElementById('s-emotion').textContent = '—';
+  document.getElementById('s-latency').textContent = '—';
+  document.getElementById('s-tokens').textContent = '—';
+}
+
+function playReplay() {
+  stopLive();
+  clearAll();
+  if (replayTimer) { replayTimer.forEach(clearTimeout); }
+  replayTimer = [];
+  const speed = parseFloat(document.getElementById('speed').value);
+  const start = performance.now();
+  document.getElementById('mode-label').innerHTML = 'mode: <b style="color:var(--text)">replay</b>';
+  CAPTURED_EVENTS.forEach(ev => {
+    const delay = ev.ts / speed;
+    replayTimer.push(setTimeout(() => dispatch(ev), delay));
+  });
+}
+
+function stopLive() {
+  if (ws) { try { ws.close(); } catch(_){} ws = null; }
+}
+
+function connectLive() {
+  stopLive();
+  clearAll();
+  document.getElementById('mode-label').innerHTML = 'mode: <b style="color:#7dff8a">live</b>';
+  const url = 'ws://127.0.0.1:8787/ws';
+  try {
+    ws = new WebSocket(url);
+    ws.onmessage = (m) => {
+      try { dispatch(JSON.parse(m.data)); } catch(_){}
+    };
+    ws.onclose = () => {
+      document.getElementById('mode-label').innerHTML = 'mode: <b style="color:#ff6b5c">disconnected</b>';
+    };
+  } catch(e) {
+    alert('Start the server first:\n  uvicorn marihacks.server:app --host 127.0.0.1 --port 8787');
+  }
+}
+
+document.getElementById('btn-replay').onclick = playReplay;
+document.getElementById('btn-live').onclick = connectLive;
+document.getElementById('btn-clear').onclick = clearAll;
+document.getElementById('speed').oninput = (e) => {
+  document.getElementById('speed-label').textContent = e.target.value + '×';
+};
+
+// ============================================================================
+// AI STUDIO INTEGRATION — listen for events from the React wrapper
+// ============================================================================
+window.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'MONIKA_EVENT') {
+    if (event.data.data.type === 'trigger_replay') {
+      playReplay();
+    } else {
+      stopLive();
+      dispatch(event.data.data);
+    }
+  }
+});
+
+// auto-play replay on load after a short beat
+setTimeout(playReplay, 600);
+</script>
+</body>
+</html>

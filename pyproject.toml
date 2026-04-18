@@ -1,0 +1,40 @@
+[project]
+name = "just-monika"
+version = "0.1.0"
+description = "Anti-intellectual-laziness AI companion running on local LLM swarms"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0",       # OpenAI-compatible client (talks to Ollama)
+]
+
+[project.optional-dependencies]
+voice = [
+    "piper-tts",         # Local text-to-speech
+    "faster-whisper",    # Local speech-to-text (Whisper)
+    "sounddevice",       # Audio recording and playback
+]
+memory = [
+    "chromadb",          # Local vector database for RAG
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[project.scripts]
+monika = "monika.main:main"
+monika-agent = "monika.agent_builder:main"
+
+[tool.setuptools.packages.find]
+include = ["monika*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["setuptools>=68.0"
