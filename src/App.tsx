@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { Send, Terminal, Database, Sparkles, Brain, Heart, Info, Clock, RefreshCw } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -13,9 +13,15 @@ export default function App() {
   const [status, setStatus] = useState("idle");
   const [memoryHits, setMemoryHits] = useState<any[]>([]);
   const [stats, setStats] = useState({ effort: 0, emotion: "", latency: 0, tokens: 0 });
+  const [user, setUser] = useState<any>(null);
+  const [geminiKey, setGeminiKey] = useState("");
+  const [elevenLabsKey, setElevenLabsKey] = useState("");
+  const [showKeys, setShowKeys] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: geminiKey || process.env.GEMINI_API_KEY });
 
   const dispatchToConstellation = (event: any) => {
     if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -38,6 +44,18 @@ export default function App() {
     dispatchToConstellation({ type: "pipeline_start", ts: 1 });
 
     try {
+      // Step 0: Image Prep (if any)
+      let contents: any[] = [{ text: userMessage }];
+      if (selectedImage) {
+        contents.push({
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: selectedImage.split(',')[1]
+          }
+        });
+        dispatchToConstellation({ type: "image_reaction", ts: 50, status: "analyzing_pixels" });
+      }
+
       // Step 2: Reasoning Validator & Emotion Classifier (Parallel)
       dispatchToConstellation({ type: "agent_start", ts: 100, agent: "reasoning_validator", model: "gemini-3-flash-preview", kind: "llm_call" });
       dispatchToConstellation({ type: "agent_start", ts: 110, agent: "emotion_classifier", model: "gemini-3-flash-preview", kind: "llm_call" });
@@ -46,10 +64,10 @@ export default function App() {
 
       const analysisResponse = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: userMessage,
+        contents,
         config: { 
           responseMimeType: "application/json",
-          systemInstruction: `Analyze the user message for a companion AI "Monika". 
+          systemInstruction: `Analyze the user message (and optional image) for a companion AI "Monika". 
         Identify:
         1. validation: A brief check of whether the prompt is valid and clear (max 10 words).
         2. emotion: The detected emotion of the user (e.g. happy, curious, confused, frustrated).
@@ -99,7 +117,7 @@ export default function App() {
 
       const personaResponse = await ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
-        contents: userMessage,
+        contents,
         config: {
           systemInstruction: `You are Monika, a highly advanced AI companion with a distinct personality.
         You are self-aware, helpful, and sometimes a bit direct. 
@@ -108,6 +126,7 @@ export default function App() {
         User Validation: ${analysis.validation}
         Complexity: ${analysis.complexity}
         Memory Context: ${hits.map(h => h.preview).join("\n")}
+        ${selectedImage ? "NOTE: You can see the user's latest image reaction via visual input." : ""}
         
         Respond naturally as Monika. Keep it concise but personal.`,
         }
@@ -124,15 +143,40 @@ export default function App() {
         input_tokens: 500, 
         output_tokens: responseText.length / 4 
       });
-      dispatchToConstellation({ type: "handoff", ts: 4100, from: "monika_persona", to: "user" });
+
+      // Step 5: Gemma Reflector (Logic Check)
+      dispatchToConstellation({ type: "handoff", ts: 4100, from: "monika_persona", to: "gemma" });
+      dispatchToConstellation({ type: "agent_start", ts: 4200, agent: "gemma", model: "gemma-2-9b", kind: "llm_call" });
+      
+      const gemmaResponse = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `You are Gemma, a technical reflector. Review the following AI response for logic and clarity.
+        Prompt: ${userMessage}
+        Response: ${responseText}
+        
+        Provide a very brief (10 words max) technical validation.`,
+      });
+
+      dispatchToConstellation({ 
+        type: "agent_complete", 
+        ts: 5000, 
+        agent: "gemma", 
+        kind: "llm_call", 
+        duration_ms: 1000, 
+        input_tokens: 600, 
+        output_tokens: 20 
+      });
+
+      dispatchToConstellation({ type: "handoff", ts: 5100, from: "gemma", to: "user" });
       
       const assistantMsg = {
         type: "assistant_message",
-        ts: 4200,
+        ts: 5200,
         text: responseText,
         effort_score: analysis.complexity || 5,
         emotion: analysis.emotion || "neutral",
-        emotion_confidence: analysis.emotion_confidence || 0.8
+        emotion_confidence: analysis.emotion_confidence || 0.8,
+        gemma_validation: gemmaResponse.text
       };
       
       dispatchToConstellation(assistantMsg);
@@ -156,19 +200,53 @@ export default function App() {
   };
 
   const handleSend = () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() && !selectedImage) return;
     const msg = inputValue;
     setInputValue("");
     processResponse(msg);
+    setSelectedImage(null);
   };
 
-  // Listen for the iframe to be ready
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAuth0Login = async () => {
+    try {
+      const resp = await fetch('/api/auth/url');
+      if (!resp.ok) {
+        const errorData = await resp.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to fetch auth URL');
+      }
+      const { url } = await resp.json();
+      
+      const width = 500, height = 600;
+      const left = (window.innerWidth / 2) - (width / 2);
+      const top = (window.innerHeight / 2) - (height / 2);
+      
+      window.open(url, 'Auth0Sync', `width=${width},height=${height},top=${top},left=${left}`);
+    } catch (err) {
+      console.error("Auth0 Error:", err);
+    }
+  };
+
+  // Listen for the iframe and auth messages
   useEffect(() => {
-    const handleReady = (event: MessageEvent) => {
-      // If the iframe script sends a "ready" message, we can sync with it.
+    const handleEvents = (event: MessageEvent) => {
+      // Auth0 Success
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        setUser(event.data.user || { name: 'Verified' });
+      }
     };
-    window.addEventListener('message', handleReady);
-    return () => window.removeEventListener('message', handleReady);
+    window.addEventListener('message', handleEvents);
+    return () => window.removeEventListener('message', handleEvents);
   }, []);
 
   return (
@@ -208,6 +286,7 @@ export default function App() {
           <AgentCard id="reasoning_validator" name="validator" color="#ff7eb9" isActive={status === 'thinking'} />
           <AgentCard id="emotion_classifier" name="emotion" color="#ff7eb9" isActive={status === 'thinking'} />
           <AgentCard id="monika_persona" name="persona" color="#ff7eb9" isActive={status === 'thinking'} />
+          <AgentCard id="gemma" name="gemma" color="#4ade80" isActive={status === 'thinking'} />
           <AgentCard id="memory" name="memory" color="#ff7eb9" isActive={status === 'thinking'} />
         </div>
 
@@ -262,26 +341,46 @@ export default function App() {
              </AnimatePresence>
           </div>
 
-          <div className="mt-4 flex gap-2">
-            <div className="flex-1 bg-black border border-border rounded-sm flex items-center">
-              <span className="pl-3 text-text-dim font-mono">&gt;</span>
-              <input 
-                type="text" 
-                placeholder="INPUT_COMMAND_OR_TEXT..." 
-                className="flex-1 bg-transparent border-none outline-none px-2 text-[13px] font-mono text-text-main"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                disabled={isLoading}
-              />
+          <div className="mt-4 flex flex-col gap-2">
+            {selectedImage && (
+              <div className="relative w-20 h-20 border border-accent rounded-sm overflow-hidden mb-2 group">
+                <img src={selectedImage} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                <button 
+                  onClick={() => setSelectedImage(null)}
+                  className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center text-accent text-[10px] transition-opacity"
+                >
+                  REMOVE
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <div className="flex-1 bg-black border border-border rounded-sm flex items-center">
+                <span className="pl-3 text-text-dim font-mono">&gt;</span>
+                <input 
+                  type="text" 
+                  placeholder="INPUT_COMMAND_OR_TEXT..." 
+                  className="flex-1 bg-transparent border-none outline-none px-2 text-[13px] font-mono text-text-main"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                  disabled={isLoading}
+                />
+                <button 
+                  onMouseDown={() => fileInputRef.current?.click()}
+                  className="px-3 text-text-dim hover:text-accent transition-colors"
+                >
+                  <Database size={14} />
+                </button>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
+              </div>
+              <button 
+                onClick={handleSend}
+                disabled={isLoading || (!inputValue.trim() && !selectedImage)}
+                className={`px-4 bg-panel border border-accent text-accent rounded-sm hover:bg-accent hover:text-black transition-all text-xs font-bold tracking-widest flex items-center gap-2 ${isLoading ? 'opacity-50' : ''}`}
+              >
+                SEND
+              </button>
             </div>
-            <button 
-              onClick={handleSend}
-              disabled={isLoading || !inputValue.trim()}
-              className={`px-4 bg-panel border border-accent text-accent rounded-sm hover:bg-accent hover:text-black transition-all text-xs font-bold tracking-widest flex items-center gap-2 ${isLoading ? 'opacity-50' : ''}`}
-            >
-              SEND
-            </button>
           </div>
         </div>
       </div>
@@ -323,8 +422,63 @@ export default function App() {
             <div className="mt-2 text-[8px] opacity-30 break-all overflow-hidden h-3">S-UUID: f81e282d-802e-40f3-a708-3a95c9688373</div>
          </div>
 
-         <footer className="mt-auto h-10 flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest">
-            <div>SYS_v2.4.0</div>
+         <footer className="mt-auto h-10 flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest relative">
+            <div className="flex items-center gap-2">
+              <div className={`w-1.5 h-1.5 rounded-full ${user ? 'bg-accent' : 'bg-red-500'}`} />
+              {user ? `AUTH_ID: ${user.name}` : 'GUEST_UNSYNCED'}
+            </div>
+            {!user && (
+              <button 
+                onClick={handleAuth0Login}
+                className="hover:text-accent transition-colors cursor-pointer border border-text-dim px-2 py-0.5 rounded-xs"
+              >
+                SYNC_AUTH0
+              </button>
+            )}
+            
+            <button 
+              onClick={() => setShowKeys(!showKeys)}
+              className="hover:text-accent transition-colors cursor-pointer border border-text-dim px-2 py-0.5 rounded-xs ml-2"
+            >
+              KV_REGISTRY
+            </button>
+
+            {showKeys && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="absolute bottom-12 left-0 w-[240px] bg-panel border border-accent p-4 rounded-sm flex flex-col gap-3 shadow-[0_0_20px_rgba(255,126,185,0.15)] z-50"
+              >
+                <div className="text-[10px] text-accent font-bold uppercase tracking-widest mb-1 border-b border-border pb-1">LLM_EXT_KEYS</div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[8px] opacity-60">GEMINI_PRIMARY [RUNTIME]</span>
+                  <input 
+                    type="password" 
+                    placeholder="KEY_HASH_SECRET..."
+                    className="bg-black border border-border text-[9px] px-2 py-1 outline-none focus:border-accent transition-colors"
+                    value={geminiKey}
+                    onChange={(e) => setGeminiKey(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[8px] opacity-60">ELEVENLABS_VOICE_ID</span>
+                  <input 
+                    type="password" 
+                    placeholder="API_KEY_EXT..."
+                    className="bg-black border border-border text-[9px] px-2 py-1 outline-none focus:border-accent transition-colors"
+                    value={elevenLabsKey}
+                    onChange={(e) => setElevenLabsKey(e.target.value)}
+                  />
+                </div>
+                <button 
+                  onClick={() => setShowKeys(false)}
+                  className="mt-1 bg-accent/20 border border-accent text-accent text-[8px] py-1 font-bold hover:bg-accent hover:text-black transition-all"
+                >
+                  SAVE_CHANGES
+                </button>
+              </motion.div>
+            )}
+
             <div className="ml-auto">LOCALHOST // {new Date().toLocaleTimeString()}</div>
          </footer>
       </div>
