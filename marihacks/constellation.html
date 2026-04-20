@@ -30,16 +30,69 @@
 
   /* side panels */
   .hud {
-    position: fixed; top: 0; bottom: 0;
+    position: absolute; top: 10px; bottom: 10px;
     width: 360px; background: var(--panel);
     backdrop-filter: blur(12px);
-    border-right: 1px solid var(--line);
-    padding: 18px 18px 0 18px;
+    border: 1px solid var(--line);
+    padding: 18px;
     display: flex; flex-direction: column; gap: 14px;
     z-index: 10;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    user-select: none;
+    transition: box-shadow 0.2s ease;
   }
-  .hud.right { left: auto; right: 0; border-right: none; border-left: 1px solid var(--line); }
-  .hud.left  { left: 0; }
+  .hud.dragging { box-shadow: 0 10px 40px rgba(255,126,185,0.3); border-color: var(--mon); }
+  .hud.right { left: auto; right: 10px; }
+  .hud.left  { left: 10px; }
+
+  .drag-handle {
+    cursor: grab;
+    padding: 4px;
+    margin: -4px;
+    border-radius: 4px;
+  }
+  .drag-handle:active { cursor: grabbing; }
+
+  .resizer {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 20;
+    background: transparent;
+    transition: background 0.2s;
+  }
+  .resizer:hover { background: rgba(255,126,185,0.2); }
+  .hud.left .resizer { right: -3px; }
+  .hud.right .resizer { left: -3px; }
+
+  .hud.minimized {
+    bottom: auto !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    overflow: hidden;
+  }
+  .hud.minimized > *:not(.drag-handle):not(.resizer) {
+    display: none;
+  }
+  .min-btn {
+    margin-left: auto;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 10px;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    font-family: inherit;
+    text-transform: uppercase;
+  }
+  .min-btn:hover {
+    border-color: var(--mon);
+    color: var(--mon);
+    background: rgba(255,126,185,0.1);
+  }
 
   .brand {
     display: flex; align-items: center; gap: 10px;
@@ -149,17 +202,34 @@
     display: flex; gap: 12px; align-items: center; z-index: 10;
   }
   .bottom-bar .sep { color: rgba(140,160,230,0.25); }
+
+  .neural-intent {
+    position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+    font-family: inherit; font-size: 10px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 4px;
+    pointer-events: none; opacity: 0.6;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    z-index: 5;
+  }
+  .neural-intent .bar { width: 40px; height: 1px; background: var(--mon); }
 </style>
 </head>
 <body>
 
 <div id="stage"><canvas id="cnv"></canvas></div>
 
+<div class="neural-intent">
+  <div class="bar"></div>
+  <span>Neural Swarm Visualization</span>
+</div>
+
 <!-- LEFT HUD -->
-<div class="hud left">
-  <div class="brand">
+<div class="hud left" id="hud-left">
+  <div class="resizer"></div>
+  <div class="brand drag-handle" style="width: 100%;">
     <div class="dot"></div>
-    <div>MONIKA <span style="color:var(--dim)">· constellation</span></div>
+    <div>MONIKA <span style="color:var(--dim)">· OS</span></div>
+    <button class="min-btn" onclick="toggleMin('hud-left')">_</button>
   </div>
 
   <div class="card">
@@ -189,8 +259,12 @@
 </div>
 
 <!-- RIGHT HUD -->
-<div class="hud right">
-  <div class="tag">event stream</div>
+<div class="hud right" id="hud-right">
+  <div class="resizer"></div>
+  <div class="tag drag-handle" style="display:flex; align-items:center; width: 100%;">
+    <span>event stream</span>
+    <button class="min-btn" onclick="toggleMin('hud-right')">_</button>
+  </div>
   <div class="log" id="log"></div>
 
   <div class="tag">latest chat</div>
@@ -318,6 +392,12 @@ const CONSTELLATIONS = {
     anchor: [0.86, 0.70],
     stars: [[0.84, 0.68], [0.88, 0.70], [0.86, 0.74]],
     lines: [[0,1],[1,2],[2,0]],
+  },
+  gemma: {
+    label: 'gemma_reflector',
+    anchor: [0.52, 0.18],
+    stars: [[0.48, 0.15], [0.52, 0.18], [0.56, 0.15]],
+    lines: [[0,1],[1,2]],
   },
 };
 
@@ -530,6 +610,11 @@ function addHit(e) {
   const box = document.getElementById('hits');
   const el = document.createElement('div');
   el.className = 'hit';
+  el.style.cursor = 'pointer';
+  el.onclick = () => {
+    window.parent.postMessage({ type: 'MONIKA_MEMORY_SELECTED', hit: e }, '*');
+    pulseAgent('memory', 1.5);
+  };
   el.innerHTML = `<span class="dist">d=${e.distance}</span><div class="title">${escape(e.title)}</div><div class="prev">${escape((e.preview||'').slice(0,120))}</div>`;
   box.appendChild(el);
 }
@@ -797,6 +882,191 @@ function connectLive() {
   }
 }
 
+function initCanvasInteraction() {
+  window.addEventListener('message', e => {
+    if (e.data?.type === 'MONIKA_AGENT_COLOR_UPDATE') {
+      const { id, color } = e.data;
+      if (AGENT_COLORS[id] !== undefined) {
+        AGENT_COLORS[id] = color;
+        // Update CSS variables for HUD elements
+        const varMap = {
+          'user': '--user',
+          'reasoning_validator': '--reas',
+          'emotion_classifier': '--emo',
+          'monika_persona': '--mon',
+          'memory': '--mem',
+          'gemma': '--gemma'
+        };
+        if (varMap[id]) {
+          document.documentElement.style.setProperty(varMap[id], color);
+        }
+        // Also update direct element color for agents not in varMap
+        const agentEl = document.querySelector(`.agent[data-id="${id}"]`);
+        if (agentEl) agentEl.style.color = color;
+      }
+    }
+
+    if (e.data?.type === 'MONIKA_AGENT_SYNC') {
+      const { agents } = e.data;
+      const list = document.getElementById('agent-list');
+      const agentIds = agents.map(a => a.id);
+      
+      // Cleanup HUD list for deleted agents
+      const currentEls = list.querySelectorAll('.agent');
+      currentEls.forEach(el => {
+        const id = el.dataset.id;
+        if (id !== 'user' && id !== 'memory' && !agentIds.includes(id)) {
+          el.remove();
+          delete CONSTELLATIONS[id];
+        }
+      });
+
+      agents.forEach(a => {
+        // Update colors
+        AGENT_COLORS[a.id] = a.color;
+
+        // Ensure constellation exists
+        if (!CONSTELLATIONS[a.id]) {
+          // Generate a dynamic constellation
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 0.25 + Math.random() * 0.15;
+          const ax = 0.5 + Math.cos(angle) * dist;
+          const ay = 0.5 + Math.sin(angle) * dist;
+          
+          CONSTELLATIONS[a.id] = {
+            label: a.name,
+            anchor: [ax, ay],
+            stars: [
+              [ax - 0.02, ay - 0.02],
+              [ax + 0.02, ay - 0.02],
+              [ax, ay + 0.03]
+            ],
+            lines: [[0, 1], [1, 2], [2, 0]]
+          };
+        } else {
+          // Update label just in case
+          CONSTELLATIONS[a.id].label = a.name;
+        }
+
+        // Update HUD list
+        let el = document.querySelector(`.agent[data-id="${a.id}"]`);
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'agent';
+          el.dataset.id = a.id;
+          el.innerHTML = '<div class="pip"></div><div class="name"></div><div class="meta"></div>';
+          list.appendChild(el);
+        }
+        el.style.color = a.color;
+        el.querySelector('.name').textContent = a.name;
+        el.style.display = a.enabled ? 'flex' : 'none';
+      });
+    }
+  });
+
+  cnv.addEventListener('click', e => {
+    const rect = cnv.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    for (const [id, config] of Object.entries(CONSTELLATIONS)) {
+      const [ax, ay] = N(...config.anchor);
+      const dist = Math.hypot(mx - ax, my - ay);
+      if (dist < 45) {
+        window.parent.postMessage({ type: 'MONIKA_AGENT_SELECTED', id: id }, '*');
+        pulseAgent(id, 1.2);
+        return;
+      }
+    }
+  });
+
+  cnv.addEventListener('mousemove', e => {
+    const rect = cnv.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let hovering = false;
+
+    for (const [id, config] of Object.entries(CONSTELLATIONS)) {
+      const [ax, ay] = N(...config.anchor);
+      const dist = Math.hypot(mx - ax, my - ay);
+      if (dist < 45) {
+        hovering = true;
+        break;
+      }
+    }
+    cnv.style.cursor = hovering ? 'pointer' : 'default';
+  });
+}
+initCanvasInteraction();
+
+// ============================================================================
+// HUD DRAG & RESIZE
+// ============================================================================
+function toggleMin(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('minimized');
+  const btn = el.querySelector('.min-btn');
+  btn.textContent = el.classList.contains('minimized') ? '□' : '_';
+}
+
+function initHudControls() {
+  const huds = [document.getElementById('hud-left'), document.getElementById('hud-right')];
+
+  huds.forEach(hud => {
+    const resizer = hud.querySelector('.resizer');
+    const handle = hud.querySelector('.drag-handle');
+    let isResizing = false;
+    let isDragging = false;
+    let startX, startY, startW, startL, startT;
+
+    resizer.addEventListener('mousedown', e => {
+      isResizing = true;
+      startX = e.clientX;
+      startW = hud.offsetWidth;
+      document.body.style.cursor = 'col-resize';
+      e.stopPropagation();
+    });
+
+    handle.addEventListener('mousedown', e => {
+      if (e.target.closest('button')) return;
+      isDragging = true;
+      hud.classList.add('dragging');
+      startX = e.clientX;
+      startY = e.clientY;
+      startL = hud.offsetLeft;
+      startT = hud.offsetTop;
+      document.body.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (isResizing) {
+        const dx = e.clientX - startX;
+        if (hud.classList.contains('left')) {
+          hud.style.width = (startW + dx) + 'px';
+        } else {
+          hud.style.width = (startW - dx) + 'px';
+        }
+      }
+      if (isDragging) {
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        hud.style.left = (startL + dx) + 'px';
+        hud.style.top = (startT + dy) + 'px';
+        hud.style.bottom = 'auto'; // allow free vertical movement
+        hud.style.right = 'auto'; // break from right anchoring if dragged
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      isResizing = false;
+      isDragging = false;
+      hud.classList.remove('dragging');
+      document.body.style.cursor = 'default';
+    });
+  });
+}
+initHudControls();
+
 document.getElementById('btn-replay').onclick = playReplay;
 document.getElementById('btn-live').onclick = connectLive;
 document.getElementById('btn-clear').onclick = clearAll;
@@ -820,6 +1090,9 @@ window.addEventListener('message', (event) => {
 
 // auto-play replay on load after a short beat
 setTimeout(playReplay, 600);
+
+// Notify parent that we are ready for data
+window.parent.postMessage({ type: 'MONIKA_CONSTELLATION_READY' }, '*');
 </script>
 </body>
 </html>

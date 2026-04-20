@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
-import { Auth0Client } from '@auth0/nextjs-auth0/server';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -89,17 +89,23 @@ async function startServer() {
   // ElevenLabs TTS Proxy
   app.post('/api/tts', async (req, res) => {
     const { text, apiKey, voiceId } = req.body;
+    const finalApiKey = apiKey || process.env.ELEVENLABS_API_KEY;
+    const finalVoiceId = voiceId || process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
     
-    if (!text || !apiKey) {
-      return res.status(400).json({ error: 'Text and API Key are required' });
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    if (!finalApiKey) {
+      return res.status(400).json({ error: 'ELEVENLABS_API_KEY missing. Please configure it in your environment or UI.' });
     }
 
     try {
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId || '21m00Tcm4TlvDq8ikWAM'}`, {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${finalVoiceId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'xi-api-key': apiKey,
+          'xi-api-key': finalApiKey,
         },
         body: JSON.stringify({
           text,
