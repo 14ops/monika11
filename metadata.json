@@ -1,6 +1,6 @@
 {
   "name": "Just Monika",
-  "description": "A local AI companion with a swarm of agents, shared memory, and a real-time constellation view visualization. Migrated from MariHacks 2026.",
+  "description": "A hybrid cloud-local AI OS with a swarm of agents, shared memory, and a real-time constellation view. Supports Gemini, Ollama, and Hugging Face for multi-infrastructure intelligence.",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["AI Agents", "Real-time Visualization"]
 }
