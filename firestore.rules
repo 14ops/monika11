@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitive Definitions
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 1. Validation Blueprints (Tasks)
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'priority', 'status', 'userId', 'createdAt', 'updatedAt']) &&
+             data.keys().size() <= 8 && // Allow for optional description
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             (!data.keys().contains('description') || (data.description is string && data.description.size() <= 1000)) &&
+             data.priority in ['low', 'medium', 'high', 'critical'] &&
+             data.status in ['pending', 'in_progress', 'completed', 'archived'] &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             data.updatedAt == request.time;
+    }
+
+    // Collection Security
+    match /tasks/{taskId} {
+      allow get: if isSignedIn() && isValidId(taskId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isSignedIn() && 
+                      isValidId(taskId) && 
+                      isValidTask(incoming()) &&
+                      incoming().createdAt == request.time;
+                      
+      allow update: if isSignedIn() && 
+                      isValidId(taskId) && 
+                      isValidTask(incoming()) &&
+                      existing().userId == request.auth.uid &&
+                      incoming().userId == existing().userId &&
+                      incoming().createdAt == existing().createdAt &&
+                      (
+                        // Action: Status Update
+                        (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                        // Action: Metadata Edit
+                        (incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'priority', 'dueDate', 'updatedAt']))
+                      );
+                      
+      allow delete: if isSignedIn() && isValidId(taskId) && existing().userId == request.auth.uid;
+    }
+  }
+}

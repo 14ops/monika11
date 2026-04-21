@@ -1,6 +1,6 @@
 {
   "name": "Just Monika",
   "description": "A local AI companion with a swarm of agents, shared memory, and a real-time constellation view visualization. Migrated from MariHacks 2026.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["AI Agents", "Real-time Visualization"]
 }

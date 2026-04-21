@@ -1,10 +1,34 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
-import { Send, Terminal, Database, Sparkles, Brain, Heart, Info, Clock, RefreshCw, Settings, Settings2, Plus, Trash2, ChevronRight, ChevronDown, ToggleRight, ToggleLeft, GripVertical } from "lucide-react";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { Send, Terminal, Database, Sparkles, Brain, Heart, Info, Clock, RefreshCw, Settings, Settings2, Plus, Trash2, ChevronRight, ChevronDown, ToggleRight, ToggleLeft, GripVertical, Languages, Maximize2, Camera, Mic, MicOff, BookOpen, FileText, ShieldAlert, AlertTriangle, AlertCircle, CheckCircle2 } from "lucide-react";
 import { motion, AnimatePresence, Reorder } from "motion/react";
+import { translations, Language } from './translations';
+import { agentRegistry, RegistryAgent } from './registry';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { getFirestore, collection, query, where, onSnapshot, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
 
 // The constellation view expects events via WebSocket or postMessage.
 // Since we are implementing the logic in React, we'll use postMessage to talk to the iframe.
+
+interface Task {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  status: 'pending' | 'in_progress' | 'completed' | 'archived';
+  dueDate?: string;
+  userId: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+// Initialize Firebase
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+const googleProvider = new GoogleAuthProvider();
 
 export default function App() {
   const [messages, setMessages] = useState<any[]>([]);
@@ -14,13 +38,20 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [memoryHits, setMemoryHits] = useState<any[]>([]);
   const [stats, setStats] = useState({ effort: 0, emotion: "", latency: 0, tokens: 0 });
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [newTask, setNewTask] = useState({ title: "", description: "", priority: "medium" as Task['priority'] });
+  const [lang, setLang] = useState<Language>(() => (localStorage.getItem('monika_lang') as Language) || 'en');
   const [geminiKey, setGeminiKey] = useState("");
   const [elevenLabsKey, setElevenLabsKey] = useState("");
   const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("21m00Tcm4TlvDq8ikWAM");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [visionActive, setVisionActive] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [agents, setAgents] = useState(() => {
     const saved = localStorage.getItem('monika_agent_order');
@@ -51,6 +82,21 @@ export default function App() {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
 
   const [selectedMemory, setSelectedMemory] = useState<any>(null);
+  const [isPulseProcessing, setIsPulseProcessing] = useState(false);
+  const [showMarketplace, setShowMarketplace] = useState(false);
+  const [isFractalMode, setIsFractalMode] = useState(false);
+  const [swarmPredictions, setSwarmPredictions] = useState<{label: string, prob: number}[]>([]);
+  const [isLobsterMode, setIsLobsterMode] = useState(false);
+  const [activeNodes, setActiveNodes] = useState(0);
+  const [isEvolverMode, setIsEvolverMode] = useState(false);
+  const [energyLevel, setEnergyLevel] = useState(92);
+  const [iterationCycle, setIterationCycle] = useState(1);
+  const [isListening, setIsListening] = useState(false);
+  const [vaultFiles, setVaultFiles] = useState<any[]>([]);
+  const [selectedVaultFile, setSelectedVaultFile] = useState<any>(null);
+  const [vaultContent, setVaultContent] = useState<string | null>(null);
+  const [showVault, setShowVault] = useState(false);
+  const [isSyncingVault, setIsSyncingVault] = useState(false);
 
   // Resize State
   const [sidebarWidth, setSidebarWidth] = useState(300);
@@ -63,7 +109,110 @@ export default function App() {
   const [integrityHeight, setIntegrityHeight] = useState(160);
   const [identityHeight, setIdentityHeight] = useState(180);
   const [hudLogHeight, setHudLogHeight] = useState(0); // 0 means flex-1
+  const [visionHeight, setVisionHeight] = useState(200);
 
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setTasks([]);
+      return;
+    }
+    const q = query(collection(db, 'tasks'), where('userId', '==', user.uid));
+    const unsubTasks = onSnapshot(q, (snapshot) => {
+      const taskList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
+      setTasks(taskList.sort((a, b) => {
+        const priorityScore = { critical: 4, high: 3, medium: 2, low: 1 };
+        if (priorityScore[a.priority] !== priorityScore[b.priority]) {
+          return priorityScore[b.priority] - priorityScore[a.priority];
+        }
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+      }));
+    }, (error) => {
+      console.error("Firestore Error:", error);
+    });
+    return () => unsubTasks();
+  }, [user]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
+
+  const addTask = async () => {
+    if (!user || !newTask.title.trim()) return;
+    try {
+      await addDoc(collection(db, 'tasks'), {
+        ...newTask,
+        status: 'pending',
+        userId: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      setNewTask({ title: "", description: "", priority: "medium" });
+      setIsTaskModalOpen(false);
+    } catch (error) {
+      console.error("Add task failed:", error);
+    }
+  };
+
+  const updateTaskStatus = async (taskId: string, status: Task['status']) => {
+    try {
+      await updateDoc(doc(db, 'tasks', taskId), {
+        status,
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Update task failed:", error);
+    }
+  };
+
+  const deleteLevelTask = async (taskId: string) => {
+    if (!window.confirm("Purge this directive from neural memory?")) return;
+    try {
+      await deleteDoc(doc(db, 'tasks', taskId));
+    } catch (error) {
+      console.error("Delete task failed:", error);
+    }
+  };
+  useEffect(() => {
+    fetchVaultFiles();
+  }, []);
+
+  const fetchVaultFiles = async () => {
+    setIsSyncingVault(true);
+    try {
+      const res = await fetch('/api/vault/list');
+      const data = await res.json();
+      setVaultFiles(data.files || []);
+    } catch (e) {
+      console.error("Vault sync failed", e);
+    } finally {
+      setIsSyncingVault(false);
+    }
+  };
+
+  const readVaultFile = async (file: any) => {
+    setSelectedVaultFile(file);
+    setVaultContent(null);
+    try {
+      const res = await fetch(`/api/vault/read?path=${encodeURIComponent(file.path)}`);
+      const data = await res.json();
+      setVaultContent(data.content);
+    } catch (e) {
+      console.error("Vault read failed", e);
+    }
+  };
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -97,6 +246,10 @@ export default function App() {
     setIdentityHeight(Math.max(100, Math.min(400, e.clientY - integrityHeight - 150)));
   };
 
+  const handleVisionResize = (e: MouseEvent) => {
+    setVisionHeight(Math.max(100, Math.min(400, e.clientY - integrityHeight - identityHeight - 200)));
+  };
+
   const handleHudLogResize = (e: MouseEvent) => {
     setHudLogHeight(Math.max(150, Math.min(600, e.clientY - 100)));
   };
@@ -110,10 +263,45 @@ export default function App() {
     };
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-    const isVertical = handler === handleConsoleResize || handler === handleConstellationResize || handler === handleIntegrityResize || handler === handleIdentityResize || handler === handleHudLogResize;
+    const isVertical = handler === handleConsoleResize || handler === handleConstellationResize || handler === handleIntegrityResize || handler === handleIdentityResize || handler === handleHudLogResize || handler === handleVisionResize;
     document.body.style.cursor = isVertical ? 'row-resize' : 'col-resize';
   };
   
+  useEffect(() => {
+    localStorage.setItem('monika_lang', lang);
+    if (iframeRef.current) {
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_LANG_SYNC', 
+        lang: lang,
+        translations: translations[lang]
+      }, '*');
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_FRACTAL_SYNC', 
+        enabled: isFractalMode 
+      }, '*');
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_LOBSTER_SYNC', 
+        enabled: isLobsterMode 
+      }, '*');
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_NODE_SYNC', 
+        count: activeNodes 
+      }, '*');
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_EVOLVER_SYNC', 
+        enabled: isEvolverMode 
+      }, '*');
+      iframeRef.current.contentWindow?.postMessage({ 
+        type: 'MONIKA_AGENT_SYNC', 
+        agents: agents.map(a => ({ id: a.id, name: a.name, enabled: a.enabled, color: a.color }))
+      }, '*');
+    }
+  }, [lang, isFractalMode, isLobsterMode, activeNodes, isEvolverMode, agents]);
+
+  const t = (key: keyof typeof translations['en']) => {
+    return translations[lang][key] || translations['en'][key];
+  };
+
   const ai = new GoogleGenAI({ apiKey: geminiKey || process.env.GEMINI_API_KEY });
 
   const dispatchToConstellation = (event: any) => {
@@ -126,10 +314,56 @@ export default function App() {
     }
   };
 
+  const handleReFetchMemory = (hit: any) => {
+    // Show a temporary "Re-fetching..." state
+    const originalPreview = hit.preview;
+    setMemoryHits(prev => prev.map(h => 
+      h.title === hit.title ? { ...h, preview: t('re_fetching'), isFetching: true } : h
+    ));
+
+    setTimeout(() => {
+      setMemoryHits(prev => prev.map(h => 
+        h.title === hit.title ? { ...h, preview: originalPreview, isFetching: false } : h
+      ));
+      dispatchToConstellation({ type: 'memory_single_sync', ts: Date.now(), ...hit });
+    }, 1500);
+  };
+
+  const addFromRegistry = (regAgent: RegistryAgent) => {
+    if (agents.find(a => a.id === regAgent.id)) return;
+    const newAgentObj = { 
+      id: regAgent.id, 
+      name: regAgent.name, 
+      description: regAgent.description, 
+      model: regAgent.model, 
+      enabled: true, 
+      color: regAgent.color 
+    };
+    setAgents([...agents, newAgentObj]);
+  };
+
   const processResponse = async (userMessage: string) => {
     setIsLoading(true);
     setStatus("thinking");
     setMemoryHits([]);
+    
+    // MiroFish Swarm Prediction simulation
+    setSwarmPredictions([
+      { label: "Technical Clarification", prob: 0.85 },
+      { label: "Memory Recall", prob: 0.62 },
+      { label: "Emotion Shift", prob: 0.31 },
+      { label: "Lobster Protocol", prob: 0.15 },
+      { label: "Self-Evolution", prob: 0.28 }
+    ]);
+
+    // n8n Node simulation start
+    setActiveNodes(3);
+
+    // Evolver simulation
+    if (isEvolverMode) {
+      setEnergyLevel(prev => Math.max(70, prev - 15));
+      setIterationCycle(prev => prev + 1);
+    }
     
     // Step 1: User Message Event
     const now = Date.now();
@@ -141,16 +375,27 @@ export default function App() {
     const getAgentModel = (id: string) => agents.find(a => a.id === id)?.model || "gemini-3-flash-preview";
     setProgress(5);
 
-    // Step 0: Image Prep (if any)
+    // Step 0: Vision / Image Prep
     let contents: any[] = [{ text: userMessage }];
-    if (selectedImage) {
+    
+    // Automatically sample from live feed if active
+    const liveSnapshot = getVisionSnapshot();
+    if (liveSnapshot) {
+      contents.push({
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: liveSnapshot.split(',')[1]
+        }
+      });
+      dispatchToConstellation({ type: "image_reaction", ts: 50, status: "sampling_neural_stream" });
+    } else if (selectedImage) {
       contents.push({
         inlineData: {
           mimeType: "image/jpeg",
           data: selectedImage.split(',')[1]
         }
       });
-      dispatchToConstellation({ type: "image_reaction", ts: 50, status: "analyzing_pixels" });
+      dispatchToConstellation({ type: "image_reaction", ts: 51, status: "analyzing_capture" });
     }
 
     setProgress(15);
@@ -175,9 +420,10 @@ export default function App() {
         config: { 
           responseMimeType: "application/json",
           systemInstruction: `Analyze the user message (and optional image) for a companion AI "Monika". 
+        Selected System Language: ${lang}
         Identify:
-        1. validation: A brief check of whether the prompt is valid and clear (max 10 words).
-        2. emotion: The detected emotion of the user (e.g. happy, curious, confused, frustrated).
+        1. validation: A brief check of whether the prompt is valid and clear (max 10 words, respond in ${lang}).
+        2. emotion: The detected emotion of the user (e.g. happy, curious, confused, frustrated, respond in ${lang}).
         3. emotion_confidence: 0-1 score.
         4. complexity: 1-10 score.
         Return JSON.`,
@@ -248,6 +494,8 @@ export default function App() {
         User Validation: ${analysis.validation}
         Complexity: ${analysis.complexity}
         Memory Context: ${contextStr}
+        Selected Language: ${lang}
+        IMPORTANT: You MUST speak in ${lang}.
         ${selectedImage ? "NOTE: You can see the user's latest image reaction via visual input." : ""}
         
         Respond naturally as Monika. Keep it concise but personal.`,
@@ -280,10 +528,11 @@ export default function App() {
       const gemmaResponse = await ai.models.generateContent({
         model: getAgentModel("gemma"),
         contents: `You are Gemma, a technical reflector. Review the following AI response for logic and clarity.
+        Selected Language: ${lang}
         Prompt: ${userMessage}
         Response: ${responseText}
         
-        Provide a very brief (10 words max) technical validation.`,
+        Provide a very brief (10 words max, in ${lang}) technical validation.`,
       });
 
       gemmaVal = gemmaResponse.text || "No validation available.";
@@ -325,6 +574,8 @@ export default function App() {
       
       dispatchToConstellation({ type: "pipeline_end", ts: 4300 });
       setStatus("done");
+      setActiveNodes(0);
+      setEnergyLevel(92);
 
       synthesizeSpeech(responseText);
     } catch (error: any) {
@@ -360,6 +611,137 @@ export default function App() {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const toggleVision = async () => {
+    if (visionActive) {
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+      }
+      setVisionActive(false);
+    } else {
+      setVisionActive(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.error("Vision Error:", err);
+        setMessages(prev => [...prev, { role: 'assistant', text: `[SYSTEM_OPTICAL_ERROR] ${t('optical_error')}` }]);
+        setVisionActive(false);
+      }
+    }
+  };
+
+  const getVisionSnapshot = (): string | null => {
+    if (videoRef.current && canvasRef.current && visionActive) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg');
+      }
+    }
+    return null;
+  };
+
+  const processVisualPulse = async () => {
+    if (!visionActive || isPulseProcessing || isLoading) return;
+    
+    const snapshot = getVisionSnapshot();
+    if (!snapshot) return;
+
+    setIsPulseProcessing(true);
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          { text: "Analyze this live frame from Monika's neural vision port. Is the user doing anything noteworthy (waving, sudden movement, new object, facial expression change)? If yes, give a VERY short, witty, or curious reaction (max 10 words). If nothing significant is happening, respond EXACTLY with 'SYSTEM_IDLE'. Respond in " + lang },
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: snapshot.split(',')[1]
+            }
+          }
+        ],
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
+      });
+
+      const reaction = response.text?.trim();
+      if (reaction && reaction !== 'SYSTEM_IDLE' && !reaction.includes('SYSTEM_IDLE')) {
+        setMessages(prev => [...prev, { role: 'assistant', text: reaction }]);
+        dispatchToConstellation({ type: "visual_discovery", ts: Date.now(), observation: reaction });
+        
+        // Optional: play a notification blip or trigger speech if enabled
+        if (isVoiceEnabled && elevenLabsKey) {
+          // synthesizeSpeech(reaction); // Assuming synthesizeSpeech is available
+        }
+      }
+    } catch (err) {
+      console.error("Pulse Analysis Error:", err);
+    } finally {
+      setIsPulseProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: any;
+    if (visionActive) {
+      // Start heartbeat pulse every 8 seconds
+      interval = setInterval(() => {
+        processVisualPulse();
+      }, 7000);
+    }
+    return () => clearInterval(interval);
+  }, [visionActive, isLoading]);
+
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert(t('mic_not_supported'));
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = lang === 'en' ? 'en-US' : lang === 'ja' ? 'ja-JP' : 'fr-FR';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      dispatchToConstellation({ type: "voice_input_start", ts: Date.now() });
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInputValue(transcript);
+      setIsListening(false);
+      // Auto-send if it has content? For now let user review.
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error("Speech Recognition Error:", event.error);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      dispatchToConstellation({ type: "voice_input_end", ts: Date.now() });
+    };
+
+    recognition.start();
   };
 
   const handleAuth0Login = async () => {
@@ -460,8 +842,24 @@ export default function App() {
         style={{ width: sidebarWidth }}
         className="flex flex-col bg-panel border-r border-border rounded-sm p-4 gap-0 z-10 shrink-0 relative overflow-y-auto"
       >
-        <header className="flex items-center justify-between border-b-2 border-accent pb-3 mb-6">
-          <div className="font-mono text-lg font-bold tracking-widest text-accent shadow-[0_0_10px_rgba(255,126,185,0.2)]">MONIKA_OS</div>
+        <header className="flex items-center justify-between border-b-2 border-accent pb-3 mb-6 shrink-0">
+          <div className="flex flex-col gap-1">
+            <div className="font-mono text-lg font-bold tracking-widest text-accent shadow-[0_0_10px_rgba(255,126,185,0.2)]">MONIKA_OS</div>
+            <div className="flex items-center gap-2">
+              <Languages size={10} className="text-text-dim" />
+              <div className="flex gap-2">
+                {(['en', 'ja', 'fr'] as Language[]).map(l => (
+                  <button 
+                    key={l}
+                    onClick={() => setLang(l)}
+                    className={`text-[9px] uppercase font-bold transition-all hover:text-accent ${lang === l ? 'text-accent border-b border-accent' : 'text-text-dim opacity-50'}`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
           <div className="text-[10px] text-text-dim font-mono">v2.4.0</div>
         </header>
 
@@ -510,13 +908,13 @@ export default function App() {
         </div>
 
         <div style={{ height: identityHeight }} className="flex flex-col gap-2 shrink-0 mb-4 overflow-hidden relative group">
-          <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-1">Core Identity</div>
+          <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-1">{t('core_identity')}</div>
           <div className="flex-1 overflow-y-auto pr-1">
-            <StatRow label="status" value={status} color={status === 'done' ? '#00ff41' : status === 'thinking' ? '#ff7eb9' : '#6b6b7a'} />
-            <StatRow label="emotion" value={stats.emotion || "—"} />
+            <StatRow label={t('status').toUpperCase()} value={status} color={status === 'done' ? '#00ff41' : status === 'thinking' ? '#ff7eb9' : '#6b6b7a'} />
+            <StatRow label={t('emotion').toUpperCase()} value={stats.emotion || "—"} />
             <div className="flex justify-between items-center text-[11px] py-1 border-bottom border-border mb-0.5">
               <div className="flex flex-col">
-                <span className="text-text-dim uppercase tracking-tighter">Voice Mode</span>
+                <span className="text-text-dim uppercase tracking-tighter uppercase">{t('voice_mode')}</span>
                 {isSynthesizing && (
                   <motion.span 
                     initial={{ opacity: 0 }} 
@@ -534,11 +932,54 @@ export default function App() {
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isVoiceEnabled ? 'left-4.5' : 'left-0.5'}`} />
               </button>
             </div>
-            <StatRow label="latency" value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : "—"} />
-            <StatRow label="tokens" value={stats.tokens || "—"} />
+            <StatRow label={t('latency').toUpperCase()} value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : "—"} />
+            <StatRow label={t('tokens').toUpperCase()} value={stats.tokens || "—"} />
           </div>
           <div 
              onMouseDown={() => startResizing(handleIdentityResize)}
+             className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
+          />
+        </div>
+
+        {/* Neural Vision Port */}
+        <div style={{ height: visionHeight }} className="flex flex-col gap-4 shrink-0 mb-4 overflow-hidden relative">
+          <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-1 flex justify-between items-center pr-2">
+            {t('vision_port')}
+            <span className={`w-1.5 h-1.5 rounded-full ${visionActive ? 'bg-[#00ff41] animate-pulse shadow-[0_0_8px_#00ff41]' : 'bg-text-dim'}`} />
+          </div>
+          <div className="flex-1 bg-black border border-border rounded-sm relative overflow-hidden group shadow-inner">
+            <video 
+              ref={videoRef}
+              autoPlay
+              playsInline
+              className={`w-full h-full object-cover transition-opacity duration-500 ${visionActive ? 'opacity-80 grayscale' : 'opacity-0'}`}
+            />
+            {!visionActive && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-text-dim">
+                <Camera size={24} className="opacity-20" />
+                <span className="text-[9px] font-mono tracking-widest opacity-40">{t('offline_feed')}</span>
+              </div>
+            )}
+            {visionActive && (
+              <div className="absolute top-2 right-2 flex flex-col items-end gap-1 pointer-events-none">
+                <div className="text-[8px] bg-accent/20 text-accent px-1 font-mono">{t('optical_mode')}</div>
+                <div className="text-[8px] bg-black/60 text-text-main px-1 font-mono uppercase">{t('live_feed')}</div>
+                {isPulseProcessing && (
+                  <motion.div 
+                    initial={{ opacity: 0 }} 
+                    animate={{ opacity: 1 }} 
+                    className="text-[8px] bg-accent/30 text-accent px-1 font-mono animate-pulse border border-accent/40"
+                  >
+                    :: {t('pulse_scanning')}
+                  </motion.div>
+                )}
+              </div>
+            )}
+            <canvas ref={canvasRef} className="hidden" />
+            <div className="absolute inset-0 pointer-events-none border border-accent/10" />
+          </div>
+          <div 
+             onMouseDown={() => startResizing(handleVisionResize)}
              className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
           />
         </div>
@@ -552,14 +993,23 @@ export default function App() {
 
         <div className="flex flex-col gap-2 flex-1 overflow-hidden">
           <div className="flex items-center justify-between border-l-3 border-accent pl-2.5 mb-1">
-            <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold">Agent Swarm</div>
-            <button 
-              onClick={() => setShowNewAgentForm(true)}
-              className="text-text-dim hover:text-accent transition-colors p-1"
-              title="Add Custom Agent"
-            >
-              <Plus size={14} />
-            </button>
+            <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold">{t('agent_swarm')}</div>
+            <div className="flex gap-1">
+              <button 
+                onClick={() => setShowMarketplace(true)}
+                className="text-text-dim hover:text-accent transition-colors p-1"
+                title={t('marketplace')}
+              >
+                <Sparkles size={14} />
+              </button>
+              <button 
+                onClick={() => setShowNewAgentForm(true)}
+                className="text-text-dim hover:text-accent transition-colors p-1"
+                title={t('add_custom_agent')}
+              >
+                <Plus size={14} />
+              </button>
+            </div>
           </div>
           
           <div className="flex flex-col gap-1 overflow-y-auto pr-1">
@@ -622,7 +1072,7 @@ export default function App() {
                         className="bg-black/40 border-x border-b border-border rounded-b-sm p-3 flex flex-col gap-2 overflow-hidden"
                       >
                         <div className="flex flex-col gap-1">
-                          <span className="text-[8px] uppercase text-text-dim">Agent Model</span>
+                          <span className="text-[8px] uppercase text-text-dim">{t('agent_model')}</span>
                           <select 
                             className="bg-black border border-border text-[9px] px-1 py-1 outline-none text-text-main"
                             value={agent.model}
@@ -634,7 +1084,7 @@ export default function App() {
                           </select>
                         </div>
                         <div className="flex flex-col gap-1">
-                          <span className="text-[8px] uppercase text-text-dim">Description</span>
+                          <span className="text-[8px] uppercase text-text-dim">{t('description')}</span>
                           <input 
                             type="text"
                             className="bg-black border border-border text-[9px] px-2 py-1 outline-none text-text-main"
@@ -670,6 +1120,40 @@ export default function App() {
                 </Reorder.Item>
               ))}
             </Reorder.Group>
+            
+            {/* Memory Vault (Obsidian Integration) */}
+            <div className="mt-4 border-t border-border pt-4 flex flex-col gap-2">
+              <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-2 flex justify-between items-center w-full">
+                <span>{t('knowledge_base')}</span>
+                <button 
+                  onClick={fetchVaultFiles}
+                  className={`text-[8px] transition-all hover:text-accent ${isSyncingVault ? 'animate-spin' : ''}`}
+                >
+                  <RefreshCw size={10} />
+                </button>
+              </div>
+              
+              <div className="flex flex-col gap-1">
+                {vaultFiles.length === 0 ? (
+                  <div className="text-[9px] text-text-dim italic px-2 opacity-50">{t('vault_offline')}</div>
+                ) : (
+                  vaultFiles.map(file => (
+                    <button 
+                      key={file.path}
+                      onClick={() => readVaultFile(file)}
+                      className="group flex items-center gap-2 p-2 rounded-sm bg-black/20 border border-border/40 hover:border-accent/40 hover:bg-accent/5 transition-all text-left"
+                    >
+                      <FileText size={12} className="text-text-dim group-hover:text-accent" />
+                      <div className="flex flex-col flex-1 truncate">
+                        <span className="text-[10px] font-bold text-text-main truncate uppercase tracking-tight">{file.name}</span>
+                        <span className="text-[8px] text-text-dim opacity-50 uppercase">{new Date(file.mtime).toLocaleDateString()}</span>
+                      </div>
+                      <ChevronRight size={10} className="text-text-dim opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
 
           <AnimatePresence>
@@ -679,7 +1163,7 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-panel border border-accent p-4 mt-2 flex flex-col gap-3 rounded-sm shadow-[0_0_20px_rgba(255,126,185,0.1)]"
               >
-                <div className="text-[10px] text-accent font-bold uppercase tracking-widest border-b border-border pb-1">Create Custom Agent</div>
+                <div className="text-[10px] text-accent font-bold uppercase tracking-widest border-b border-border pb-1">{t('add_custom_agent')}</div>
                 <div className="flex flex-col gap-2">
                   <input 
                     placeholder="AGENT_ID..." 
@@ -703,7 +1187,7 @@ export default function App() {
                     <option value="gemma-2-9b">Gemma 2 9B</option>
                   </select>
                   <input 
-                    placeholder="DESCRIPTION..." 
+                    placeholder={`${t('description')}...`}
                     className="bg-black border border-border text-[9px] px-2 py-1.5 outline-none"
                     value={newAgent.description}
                     onChange={e => setNewAgent({...newAgent, description: e.target.value})}
@@ -712,9 +1196,9 @@ export default function App() {
                 <div className="flex gap-2">
                   <button 
                     onClick={() => setShowNewAgentForm(false)}
-                    className="flex-1 border border-border text-text-dim text-[9px] py-1.5 hover:bg-white/5 transition-colors"
+                    className="flex-1 border border-border text-text-dim text-[9px] py-1.5 hover:bg-white/5 transition-colors text-xs"
                   >
-                    CANCEL
+                    {t('cancel').toUpperCase()}
                   </button>
                   <button 
                     onClick={() => {
@@ -723,9 +1207,9 @@ export default function App() {
                       setShowNewAgentForm(false);
                       setNewAgent({ id: "", name: "", model: "gemini-3-flash-preview", description: "" });
                     }}
-                    className="flex-1 bg-accent/20 border border-accent text-accent text-[9px] py-1.5 hover:bg-accent hover:text-black font-bold transition-all"
+                    className="flex-1 bg-accent/20 border border-accent text-accent text-[9px] py-1.5 hover:bg-accent hover:text-black font-bold transition-all text-xs"
                   >
-                    DEPLOY
+                    {t('create_agent').toUpperCase()}
                   </button>
                 </div>
               </motion.div>
@@ -765,12 +1249,12 @@ export default function App() {
           className={`bg-black border border-border rounded-sm relative overflow-hidden transition-all duration-300 ${constellationHeight === 0 && !isConstellationMinimized ? 'flex-1' : 'shrink-0'}`}
         >
            <div className="absolute top-3 left-4 z-20 text-[10px] text-accent uppercase tracking-widest font-bold border-l-3 border-accent pl-2.5 flex items-center gap-4">
-             Constellation View
+             {t('constellation_view')}
              <button 
                onClick={() => setIsConstellationMinimized(!isConstellationMinimized)}
                className="ml-2 px-1.5 py-0.5 border border-accent/30 text-[9px] hover:bg-accent/10 transition-colors rounded-xs"
              >
-               {isConstellationMinimized ? 'EXPAND' : 'MINIMIZE'}
+               {isConstellationMinimized ? t('ready') : t('minimize')}
              </button>
            </div>
 
@@ -804,10 +1288,10 @@ export default function App() {
           style={{ height: consoleHeight }}
           className="bg-panel border border-border rounded-sm flex flex-col p-4 relative overflow-hidden shrink-0"
         >
-          <div className="absolute top-3 left-4 z-20 text-[10px] text-accent uppercase tracking-widest font-bold border-l-3 border-accent pl-2.5">System Console</div>
+          <div className="absolute top-3 left-4 z-20 text-[10px] text-accent uppercase tracking-widest font-bold border-l-3 border-accent pl-2.5">{t('system_console')}</div>
           
           <div className="flex-1 mt-6 flex flex-col gap-2 overflow-y-auto font-mono text-[13px] bg-black/40 border border-border/50 p-4">
-             <div className="text-text-dim">&gt; SYSTEM READY. LISTENING FOR INPUT...</div>
+             <div className="text-text-dim">&gt; {t('system_ready')}</div>
              <AnimatePresence>
                {messages.map((msg, i) => (
                  <motion.div 
@@ -827,6 +1311,16 @@ export default function App() {
           </div>
 
           <div className="mt-4 flex flex-col gap-2">
+            {isListening && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex items-center gap-2 mb-1 px-3 py-1 bg-red-500/10 border border-red-500/30 rounded-xs"
+              >
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-red-500 tracking-widest animate-pulse">{t('listening')}</span>
+              </motion.div>
+            )}
             {selectedImage && (
               <div className="relative w-20 h-20 border border-accent rounded-sm overflow-hidden mb-2 group">
                 <img src={selectedImage} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -843,13 +1337,27 @@ export default function App() {
                 <span className="pl-3 text-text-dim font-mono">&gt;</span>
                 <input 
                   type="text" 
-                  placeholder="INPUT_COMMAND_OR_TEXT..." 
+                  placeholder={`${t('input_placeholder')}...`}
                   className="flex-1 bg-transparent border-none outline-none px-2 text-[13px] font-mono text-text-main"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                   disabled={isLoading}
                 />
+                <button 
+                  onMouseDown={() => toggleVision()}
+                  className={`px-3 transition-colors border-r border-border/50 ${visionActive ? 'text-accent' : 'text-text-dim hover:text-accent'}`}
+                  title={visionActive ? "Shutdown Neural Vision" : t('optical_mode')}
+                >
+                  <Camera size={14} className={visionActive ? "animate-pulse" : ""} />
+                </button>
+                <button 
+                  onClick={toggleVoiceInput}
+                  className={`px-3 transition-colors border-r border-border/50 ${isListening ? 'text-red-500' : 'text-text-dim hover:text-accent'}`}
+                  title={isListening ? t('listening') : t('vocal_input')}
+                >
+                  {isListening ? <Mic size={14} className="animate-pulse" /> : <MicOff size={14} />}
+                </button>
                 <button 
                   onMouseDown={() => fileInputRef.current?.click()}
                   className="px-3 text-text-dim hover:text-accent transition-colors"
@@ -863,7 +1371,7 @@ export default function App() {
                 disabled={isLoading || (!inputValue.trim() && !selectedImage)}
                 className={`px-4 bg-panel border border-accent text-accent rounded-sm hover:bg-accent hover:text-black transition-all text-xs font-bold tracking-widest flex items-center gap-2 ${isLoading ? 'opacity-50' : ''}`}
               >
-                SEND
+                {t('send')}
               </button>
             </div>
           </div>
@@ -885,41 +1393,143 @@ export default function App() {
           <div className="h-full w-[1px] bg-border group-hover:bg-accent mx-auto" />
         </div>
 
-         <div 
-           style={hudLogHeight > 0 ? { height: hudLogHeight } : {}}
-           className={`flex-1 bg-panel border border-border rounded-sm p-4 flex flex-col overflow-hidden ${hudLogHeight > 0 ? 'shrink-0' : ''}`}
-         >
-            <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-4">Interaction Log</div>
-            <div className="flex flex-col gap-4 overflow-y-auto">
-              {memoryHits.length === 0 && (
-                <div className="text-[11px] text-text-dim border-l-2 border-border pl-2.5">
-                  <div className="text-[10px] opacity-50 mb-1">04:02:11</div>
-                  System idle. Watching environment variables.
-                </div>
-              )}
-              {memoryHits.map((hit, i) => (
-                <motion.div 
-                  key={i}
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="text-[11px] text-text-main border-l-2 border-accent/30 pl-2.5"
-                >
-                  <div className="text-[10px] text-text-dim mb-1">{new Date().toLocaleTimeString()}</div>
-                  <div className="font-bold text-accent mb-1">{hit.title}</div>
-                  <div className="text-text-dim text-[10px] line-clamp-3">{hit.preview}</div>
-                </motion.div>
-              ))}
-            </div>
-         </div>
+        {/* Active Directives (Tasks) */}
+        <div className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-3 shrink-0 overflow-hidden min-h-[160px]">
+          <div className="text-[10px] text-accent font-bold uppercase tracking-widest border-l-3 border-accent pl-2.5 mb-1 flex justify-between items-center w-full">
+            <span>{t('directives')}</span>
+            <button 
+              onClick={() => user ? setIsTaskModalOpen(true) : handleLogin()}
+              className="text-[8px] bg-accent/20 px-1 rounded-xs hover:bg-accent hover:text-black transition-all flex items-center gap-1"
+            >
+              <Plus size={10} /> {t('add_directive')}
+            </button>
+          </div>
+          <div className="flex flex-col gap-2 overflow-y-auto max-h-[300px] pr-1 custom-scrollbar">
+            {tasks.length === 0 ? (
+              <div className="text-[9px] text-text-dim italic text-center py-4 border border-dashed border-border/30 rounded-xs">
+                {t('no_directives')}
+              </div>
+            ) : (
+              tasks.map(task => {
+                const priorityConfig = {
+                  critical: { color: '#ff4d4d', icon: ShieldAlert, label: 'CRITICAL' },
+                  high: { color: '#ffa200', icon: AlertTriangle, label: 'HIGH' },
+                  medium: { color: '#3dfff3', icon: AlertCircle, label: 'MEDIUM' },
+                  low: { color: '#6b6b7a', icon: CheckCircle2, label: 'LOW' }
+                };
+                const config = priorityConfig[task.priority as keyof typeof priorityConfig] || priorityConfig.medium;
+                const Icon = config.icon;
 
-         <div 
-           onMouseDown={() => startResizing(handleHudLogResize)}
-           className="h-2 w-full cursor-row-resize hover:bg-accent/20 group flex items-center shrink-0"
-         >
+                return (
+                  <div 
+                    key={task.id} 
+                    className="group relative bg-black/40 border border-border/60 p-2.5 rounded-xs flex flex-col gap-1.5 hover:border-accent/40 transition-all border-l-4" 
+                    style={{ borderLeftColor: config.color }}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex flex-col gap-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 overflow-hidden">
+                          <Icon size={12} style={{ color: config.color }} className="shrink-0" />
+                          <span className={`text-[10px] font-bold uppercase tracking-wide truncate ${task.status === 'completed' ? 'line-through opacity-40' : 'text-text-main'}`}>
+                            {task.title}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                           <span className="text-[7px] font-bold px-1 rounded-xs border" style={{ borderColor: `${config.color}40`, color: config.color, backgroundColor: `${config.color}10` }}>
+                             {config.label}
+                           </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => updateTaskStatus(task.id, task.status === 'completed' ? 'pending' : 'completed')}
+                          className={`p-1 rounded-xs transition-all ${task.status === 'completed' ? 'bg-accent/20 text-accent' : 'bg-border/30 text-text-dim hover:text-accent'}`}
+                        >
+                          <RefreshCw size={10} className={task.status === 'in_progress' ? 'animate-spin-slow' : ''} />
+                        </button>
+                        <button 
+                          onClick={() => deleteLevelTask(task.id)}
+                          className="p-1 rounded-xs bg-border/30 text-text-dim hover:text-red-500 transition-all"
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </div>
+                    </div>
+                    {task.description && (
+                      <p className="text-[9px] text-text-dim line-clamp-2 leading-relaxed italic opacity-80 border-t border-border/20 pt-1 mt-1">
+                        {task.description}
+                      </p>
+                    )}
+                    <div className="flex justify-between items-center mt-1 text-[8px] font-mono">
+                      <span className="opacity-50 uppercase tracking-tighter">{task.status.replace('_', ' ')}</span>
+                      <span className="opacity-30">HEX_{task.id.slice(0, 4).toUpperCase()}</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div 
+          onMouseDown={() => startResizing(handleHudLogResize)}
+          className="h-2 w-full cursor-row-resize hover:bg-accent/20 group flex items-center shrink-0"
+        >
           <div className="w-full h-[1px] bg-border group-hover:bg-accent" />
         </div>
 
-         <div className="bg-panel border border-border rounded-sm p-4 font-mono text-[9px] text-text-dim flex flex-col gap-1 shrink-0">
+        <div 
+          style={hudLogHeight > 0 ? { height: hudLogHeight } : {}}
+          className={`flex-1 bg-panel border border-border rounded-sm p-4 flex flex-col overflow-hidden ${hudLogHeight > 0 ? 'shrink-0' : ''}`}
+        >
+          <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-4">{t('interaction_log')}</div>
+          <div className="flex flex-col gap-4 overflow-y-auto">
+            {memoryHits.length === 0 && (
+              <div className="text-[11px] text-text-dim border-l-2 border-border pl-2.5">
+                <div className="text-[10px] opacity-50 mb-1">{new Date().toLocaleTimeString()}</div>
+                {t('system_idle')}
+              </div>
+            )}
+            {memoryHits.map((hit, i) => (
+              <motion.div 
+                key={i}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="group relative text-[11px] text-text-main border-l-2 border-accent/30 pl-2.5 py-1 hover:bg-accent/5 transition-all"
+              >
+                <div className="text-[10px] text-text-dim mb-1 flex justify-between items-center">
+                  <span>{new Date().toLocaleTimeString()}</span>
+                  <span className="text-[9px] bg-accent/10 px-1 rounded-xs border border-accent/20">{hit.source?.toUpperCase() || t('source')}</span>
+                </div>
+                <div className="font-bold text-accent mb-1 flex justify-between items-center">
+                  <span>{hit.title}</span>
+                </div>
+                <div className={`text-text-dim text-[10px] ${hit.isFetching ? 'animate-pulse text-accent' : 'line-clamp-3'}`}>
+                  {hit.preview}
+                </div>
+                
+                {/* Action Buttons Layer */}
+                <div className="mt-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={() => handleReFetchMemory(hit)}
+                    disabled={hit.isFetching}
+                    className="flex-1 bg-accent/10 border border-accent/30 text-accent text-[8px] py-1 hover:bg-accent hover:text-black transition-all flex items-center justify-center gap-1 font-bold"
+                  >
+                    <RefreshCw size={8} /> {t('re_fetch')}
+                  </button>
+                  <button 
+                    onClick={() => setSelectedMemory(hit)}
+                    className="flex-1 border border-border text-text-dim text-[8px] py-1 hover:bg-white/10 transition-all flex items-center justify-center gap-1 font-bold"
+                  >
+                    <Maximize2 size={8} /> {t('details')}
+                  </button>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-panel border border-border rounded-sm p-4 font-mono text-[9px] text-text-dim flex flex-col gap-1 shrink-0">
             <div className="flex justify-between items-center mb-2">
               <span className="text-accent uppercase tracking-widest font-bold">System Status</span>
               <span className="w-1.5 h-1.5 rounded-full bg-[#00ff41] animate-pulse"></span>
@@ -927,20 +1537,135 @@ export default function App() {
             <div className="flex justify-between"><span>CPU_LOAD:</span><span>14%</span></div>
             <div className="flex justify-between"><span>MEM_USED:</span><span>882MB</span></div>
             <div className="flex justify-between"><span>TEMP_CORE:</span><span>42°C</span></div>
+            <div className="flex justify-between uppercase text-[8px] mt-1 border-t border-border/20 pt-1">
+              <span className="text-text-main">{t('recursive_mode')}</span>
+              <button 
+                onClick={() => setIsFractalMode(!isFractalMode)}
+                className={`px-1.5 border ${isFractalMode ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
+              >
+                {isFractalMode ? 'ENABLED' : 'DISABLED'}
+              </button>
+            </div>
+            <div className="flex justify-between uppercase text-[8px] mt-1">
+              <span className="text-text-main">{t('lobster_mode')}</span>
+              <button 
+                onClick={() => setIsLobsterMode(!isLobsterMode)}
+                className={`px-1.5 border ${isLobsterMode ? 'bg-[#ff4d4d]/20 border-[#ff4d4d] text-[#ff4d4d]' : 'border-border text-text-dim'}`}
+              >
+                {isLobsterMode ? 'ACTIVE' : 'IDLE'}
+              </button>
+            </div>
+            <div className="flex justify-between uppercase text-[8px] mt-1">
+              <span className="text-text-main">{t('evolver_mode')}</span>
+              <button 
+                onClick={() => setIsEvolverMode(!isEvolverMode)}
+                className={`px-1.5 border ${isEvolverMode ? 'bg-[#00ff9d]/20 border-[#00ff9d] text-[#00ff9d]' : 'border-border text-text-dim'}`}
+              >
+                {isEvolverMode ? 'ENABLED' : 'DISABLED'}
+              </button>
+            </div>
             <div className="mt-2 text-[8px] opacity-30 break-all overflow-hidden h-3">S-UUID: f81e282d-802e-40f3-a708-3a95c9688373</div>
          </div>
 
-         <footer className="mt-auto h-10 flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest relative">
+         <div className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden">
+            <div className="text-[10px] text-[#00ff9d] font-bold uppercase tracking-widest border-l-3 border-[#00ff9d] pl-2.5 mb-1 flex justify-between items-center w-full">
+              <span>{t('mutation_engine')}</span>
+              {isEvolverMode && <span className="text-[8px] bg-[#00ff9d]/20 px-1 rounded-xs animate-pulse">ITERATING</span>}
+            </div>
+            <div className="flex flex-col gap-1.5 font-mono text-[9px]">
+              <div className="flex flex-col gap-1">
+                <div className="flex justify-between text-text-dim uppercase">
+                  <span>{t('energy_processing')}</span>
+                  <span className="text-[#00ff9d]">{energyLevel}%</span>
+                </div>
+                <div className="h-1 w-full bg-border rounded-full overflow-hidden">
+                  <motion.div 
+                    animate={{ width: `${energyLevel}%` }}
+                    className="h-full bg-[#00ff9d]"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-between border-t border-border/20 pt-1 text-text-dim uppercase">
+                <span>{t('iteration_cycle')}:</span>
+                <span className="text-text-main">GEN_{iterationCycle.toString().padStart(3, '0')}</span>
+              </div>
+              <div className="flex justify-between text-text-dim uppercase">
+                <span>{t('entropy_level')}:</span>
+                <span className="text-[#3dfff3]">0.428_SIGMA</span>
+              </div>
+            </div>
+         </div>
+
+         <div className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden">
+            <div className="text-[10px] text-accent font-bold uppercase tracking-widest border-l-3 border-accent pl-2.5 mb-1 flex justify-between items-center w-full">
+              <span>{t('workflow_engine')}</span>
+              {activeNodes > 0 && <span className="text-[8px] bg-accent/20 px-1 rounded-xs animate-pulse">AUTORUN</span>}
+            </div>
+            <div className="flex flex-col gap-1 text-[9px] font-mono text-text-dim">
+              <div className="flex justify-between">
+                <span>{t('nodes_active')}:</span>
+                <span className={activeNodes > 0 ? "text-accent" : ""}>{activeNodes}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>{t('operator_ready')}:</span>
+                <span className={isLobsterMode ? "text-[#ff4d4d]" : ""}>{isLobsterMode ? "YES" : "NO"}</span>
+              </div>
+            </div>
+            <div className="h-1 w-full bg-border rounded-full overflow-hidden mt-1">
+              <motion.div 
+                animate={{ x: activeNodes > 0 ? [-50, 100] : 0 }}
+                transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                className={`h-full w-10 ${activeNodes > 0 ? 'bg-accent' : 'bg-transparent'}`}
+              />
+            </div>
+         </div>
+
+         <div className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden">
+            <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-1">{t('prediction_swarm')}</div>
+            <div className="flex flex-col gap-1.5">
+              {swarmPredictions.length === 0 ? (
+                <div className="text-[9px] text-text-dim italic">Waiting for trajectory data...</div>
+              ) : (
+                swarmPredictions.map((pred, i) => (
+                  <div key={i} className="flex flex-col gap-1">
+                    <div className="flex justify-between text-[9px] uppercase font-mono">
+                      <span className="text-text-main">{pred.label}</span>
+                      <span className="text-accent">{(pred.prob * 100).toFixed(0)}%</span>
+                    </div>
+                    <div className="h-1 w-full bg-border rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pred.prob * 100}%` }}
+                        className="h-full bg-accent shadow-[0_0_8px_rgba(255,126,185,0.6)]"
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[8px] text-text-dim uppercase font-mono opacity-50">
+              <RefreshCw size={8} className="animate-spin-slow" /> {t('trajectories')} active
+            </div>
+         </div>
+
+          <footer className="mt-auto h-10 flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest relative">
             <div className="flex items-center gap-2">
               <div className={`w-1.5 h-1.5 rounded-full ${user ? 'bg-accent' : 'bg-red-500'}`} />
-              {user ? `AUTH_ID: ${user.name}` : 'GUEST_UNSYNCED'}
+              {user ? `AUTH_ID: ${user.displayName || 'OPERATOR'}` : 'GUEST_UNSYNCED'}
             </div>
-            {!user && (
+            {!user ? (
               <button 
-                onClick={handleAuth0Login}
+                onClick={handleLogin}
                 className="hover:text-accent transition-colors cursor-pointer border border-text-dim px-2 py-0.5 rounded-xs"
               >
-                SYNC_AUTH0
+                SYNC_CLOUDBASE
+              </button>
+            ) : (
+              <button 
+                onClick={handleLogout}
+                className="hover:text-accent transition-colors cursor-pointer border border-text-dim px-2 py-0.5 rounded-xs"
+              >
+                DISCONNECT
               </button>
             )}
             
@@ -999,6 +1724,72 @@ export default function App() {
       </div>
 
       <AnimatePresence>
+        {showMarketplace && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-10 bg-black/80 backdrop-blur-md overflow-y-auto">
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="w-full max-w-2xl bg-panel border-2 border-accent/40 rounded-sm p-6 relative flex flex-col gap-6 shadow-[0_0_50px_rgba(255,126,185,0.2)]"
+            >
+              <div className="flex justify-between items-center border-b border-border pb-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={20} className="text-accent" />
+                  <div className="flex flex-col">
+                    <span className="text-md text-accent font-bold uppercase tracking-widest font-mono">{t('marketplace')}</span>
+                    <span className="text-[9px] text-text-dim font-mono">SOURCE: github.com/wshobson/agents</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowMarketplace(false)}
+                  className="text-text-dim hover:text-accent transition-all p-1 hover:rotate-90"
+                >
+                  <Plus className="rotate-45" size={24} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                {agentRegistry.map(agent => {
+                  const isInstalled = agents.some(a => a.id === agent.id);
+                  return (
+                    <div key={agent.id} className="bg-black/40 border border-border/60 p-4 rounded-sm flex flex-col gap-3 group hover:border-accent/40 transition-all">
+                      <div className="flex justify-between items-start">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-text-dim uppercase tracking-tighter opacity-60">{agent.category}</span>
+                          <span className="text-accent font-bold uppercase tracking-wider">{agent.name}</span>
+                        </div>
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: agent.color }} />
+                      </div>
+                      <p className="text-[11px] text-text-main/80 leading-relaxed italic border-l border-border pl-2">
+                        "{agent.description}"
+                      </p>
+                      <div className="flex justify-between items-center mt-auto pt-2 border-t border-border/20">
+                        <span className="text-[9px] font-mono opacity-40">{agent.model}</span>
+                        <button 
+                          onClick={() => addFromRegistry(agent)}
+                          disabled={isInstalled}
+                          className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 rounded-xs transition-all ${isInstalled ? 'bg-text-dim/10 text-text-dim cursor-default' : 'bg-accent/10 border border-accent/40 text-accent hover:bg-accent hover:text-black active:scale-95'}`}
+                        >
+                          {isInstalled ? 'INSTALLED' : t('add_to_swarm')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end pt-4 border-t border-border/50">
+                <button 
+                  onClick={() => setShowMarketplace(false)}
+                  className="px-8 py-2 bg-text-dim/10 border border-text-dim/20 text-text-main text-[10px] font-bold uppercase tracking-widest hover:bg-text-dim hover:text-black transition-all"
+                >
+                  {t('cancel').toUpperCase()}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {selectedMemory && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-10 bg-black/60 backdrop-blur-sm">
             <motion.div 
@@ -1010,42 +1801,189 @@ export default function App() {
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent to-transparent opacity-50" />
               <div className="flex justify-between items-start">
                 <div className="flex flex-col">
-                  <div className="text-[10px] text-accent font-bold uppercase tracking-widest bg-accent/10 px-2 py-0.5 self-start mb-2">Memory Fragment</div>
-                  <h2 className="text-xl font-mono font-bold text-text-main leading-tight">{selectedMemory.title}</h2>
+                  <div className="text-[10px] text-accent font-bold uppercase tracking-widest bg-accent/10 px-2 py-0.5 self-start mb-2 font-mono">{t('memory_details').toUpperCase()}</div>
+                  <h2 className="text-xl font-mono font-bold text-text-main leading-tight tracking-tight">{selectedMemory.title}</h2>
                 </div>
                 <button 
                   onClick={() => setSelectedMemory(null)}
-                  className="text-text-dim hover:text-accent transition-colors p-1"
+                  className="text-text-dim hover:text-accent transition-all p-1 hover:rotate-90"
                 >
                   <Plus className="rotate-45" size={24} />
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-[10px] uppercase font-mono tracking-wider pt-2 border-t border-border">
-                <div className="flex flex-col gap-1">
-                  <span className="text-text-dim">Source Origin</span>
-                  <span className="text-text-main">{selectedMemory.source || 'Monika Vault'}</span>
+              <div className="grid grid-cols-2 gap-4 text-[10px] uppercase font-mono tracking-wider pt-4 border-t border-border">
+                <div className="flex flex-col gap-1 border-l border-accent/20 pl-2">
+                  <span className="text-text-dim text-[9px]">{t('source')} ORIGIN</span>
+                  <span className="text-text-main font-bold">{selectedMemory.source || 'Monika Vault'}</span>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-text-dim">Vector Distance</span>
-                  <span className="text-accent">{selectedMemory.distance?.toFixed(4) || 'Unknown'}</span>
+                <div className="flex flex-col gap-1 border-l border-accent/20 pl-2">
+                  <span className="text-text-dim text-[9px]">VECTOR DISTANCE</span>
+                  <span className="text-accent font-bold">{selectedMemory.distance?.toFixed(4) || 'Unknown'}</span>
                 </div>
               </div>
 
               <div className="flex flex-col gap-2 mt-2">
-                <div className="text-[10px] text-text-dim uppercase tracking-widest font-bold">Retrieved Context</div>
-                <div className="bg-black/40 border border-border p-4 rounded-sm font-mono text-[13px] leading-relaxed text-text-main whitespace-pre-wrap max-h-[40vh] overflow-y-auto custom-scrollbar">
+                <div className="text-[10px] text-text-dim uppercase tracking-widest font-bold font-mono">Retrieved Context</div>
+                <div className="bg-black/60 border border-border p-4 rounded-sm font-mono text-[12.5px] leading-relaxed text-text-main/90 whitespace-pre-wrap max-h-[40vh] overflow-y-auto custom-scrollbar shadow-inner">
                   {selectedMemory.preview}
                 </div>
               </div>
 
-              <div className="flex justify-end pt-4">
+              <div className="flex justify-between items-center pt-6 mt-2 border-t border-border/50">
+                <button 
+                  onClick={() => {
+                    handleReFetchMemory(selectedMemory);
+                    setSelectedMemory(null);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 border border-accent/40 text-accent text-[10px] font-bold uppercase tracking-widest hover:bg-accent hover:text-black transition-all"
+                >
+                  <RefreshCw size={14} /> {t('re_fetch')}
+                </button>
                 <button 
                   onClick={() => setSelectedMemory(null)}
-                  className="px-6 py-2 bg-accent text-bg text-[11px] font-bold uppercase tracking-widest hover:brightness-110 transition-all active:scale-95"
+                  className="px-8 py-2 bg-text-dim/10 border border-text-dim/20 text-text-main text-[10px] font-bold uppercase tracking-widest hover:bg-text-dim hover:text-black transition-all"
                 >
-                  DISMISS DATA
+                  {t('cancel').toUpperCase()}
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isTaskModalOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-panel border-2 border-accent/40 rounded-sm p-6 flex flex-col gap-5 shadow-2xl"
+            >
+              <div className="flex justify-between items-center border-b border-border pb-3">
+                <span className="text-accent font-bold uppercase tracking-widest font-mono flex items-center gap-2">
+                  <Plus size={16} /> {t('add_directive')}
+                </span>
+                <button onClick={() => setIsTaskModalOpen(false)} className="text-text-dim hover:text-accent">
+                  <Plus className="rotate-45" size={20} />
+                </button>
+              </div>
+              
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-text-dim uppercase tracking-wider">{t('directives')}</label>
+                  <input 
+                    type="text" 
+                    placeholder="Brief objective..."
+                    className="bg-black border border-border px-3 py-2 text-sm outline-none focus:border-accent transition-all font-mono text-text-main"
+                    value={newTask.title}
+                    onChange={(e) => setNewTask({...newTask, title: e.target.value})}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-text-dim uppercase tracking-wider">{t('description')}</label>
+                  <textarea 
+                    placeholder="Detailed system instructions..."
+                    rows={3}
+                    className="bg-black border border-border px-3 py-2 text-sm outline-none focus:border-accent transition-all font-mono resize-none text-text-main"
+                    value={newTask.description}
+                    onChange={(e) => setNewTask({...newTask, description: e.target.value})}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-text-dim uppercase tracking-wider">{t('priority')}</label>
+                  <div className="flex gap-2">
+                    {['low', 'medium', 'high', 'critical'].map(p => {
+                      const pColors = {
+                        critical: '#ff4d4d',
+                        high: '#ffa200',
+                        medium: '#3dfff3',
+                        low: '#6b6b7a'
+                      };
+                      const c = pColors[p as keyof typeof pColors];
+                      const isActive = newTask.priority === p;
+                      
+                      return (
+                        <button
+                          key={p}
+                          onClick={() => setNewTask({...newTask, priority: p as Task['priority']})}
+                          className="flex-1 py-1.5 text-[9px] font-bold uppercase border transition-all"
+                          style={{ 
+                            borderColor: isActive ? c : '#2a2a30',
+                            color: isActive ? c : '#6b6b7a',
+                            backgroundColor: isActive ? `${c}15` : 'transparent',
+                            opacity: isActive ? 1 : 0.4
+                          }}
+                        >
+                          {p}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-2">
+                <button 
+                  onClick={() => setIsTaskModalOpen(false)}
+                  className="flex-1 py-2 border border-border text-text-dim text-xs font-bold uppercase hover:bg-white/5 transition-all"
+                >
+                  {t('cancel')}
+                </button>
+                <button 
+                  onClick={addTask}
+                  disabled={!newTask.title.trim()}
+                  className="flex-1 py-2 bg-accent text-black text-xs font-bold uppercase hover:opacity-90 disabled:opacity-50 transition-all"
+                >
+                  INITIALIZE_DIRECTIVE
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Memory Vault View Modal */}
+        {selectedVaultFile && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center p-10 bg-black/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-4xl bg-panel border-2 border-accent/40 rounded-sm p-8 flex flex-col gap-6 shadow-[0_0_50px_rgba(255,126,185,0.2)] max-h-[85vh] relative"
+            >
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-accent to-transparent opacity-50" />
+              
+              <div className="flex justify-between items-start">
+                <div className="flex flex-col">
+                  <div className="text-[10px] text-accent font-bold uppercase tracking-widest bg-accent/10 px-2 py-0.5 self-start mb-2 font-mono flex items-center gap-1.5">
+                    <BookOpen size={10} /> {t('memory_vault').toUpperCase()}
+                  </div>
+                  <h2 className="text-2xl font-mono font-bold text-text-main leading-tight tracking-tight">{selectedVaultFile.name.toUpperCase()}</h2>
+                  <div className="text-[9px] text-text-dim mt-1 font-mono uppercase">Neural Hash: {selectedVaultFile.path}</div>
+                </div>
+                <button 
+                  onClick={() => setSelectedVaultFile(null)}
+                  className="text-text-dim hover:text-accent transition-all p-1 hover:rotate-90"
+                >
+                  <Plus className="rotate-45" size={32} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar font-mono text-sm leading-relaxed text-text-main/90 bg-black/30 border border-border/50 p-6 rounded-xs shadow-inner whitespace-pre-wrap">
+                {!vaultContent ? (
+                  <div className="flex items-center justify-center h-40 gap-3 text-accent animate-pulse uppercase tracking-[2px]">
+                    <RefreshCw size={20} className="animate-spin" /> {t('fetching_vault')}
+                  </div>
+                ) : (
+                  vaultContent
+                )}
+              </div>
+
+              <div className="flex justify-between items-center border-t border-border/50 pt-4 text-[10px] text-text-dim uppercase font-mono">
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-accent" />
+                  Source: system://marihacks/demo_vault/{selectedVaultFile.path}
+                </div>
+                <div>Modified: {new Date(selectedVaultFile.mtime).toLocaleString()}</div>
               </div>
             </motion.div>
           </div>

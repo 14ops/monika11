@@ -1,0 +1,34 @@
+{
+  "entities": {
+    "Task": {
+      "title": "Task (Directive)",
+      "description": "A system directive or task for the user/operator.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Short summary of the task" },
+        "description": { "type": "string", "description": "Detailed explanation" },
+        "priority": { 
+          "type": "string", 
+          "enum": ["low", "medium", "high", "critical"],
+          "description": "Urgency level"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "in_progress", "completed", "archived"],
+          "description": "Current lifecycle status"
+        },
+        "dueDate": { "type": "string", "format": "date-time", "description": "Deadline for completion" },
+        "userId": { "type": "string", "description": "Owner of the directive" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "priority", "status", "userId", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Global task registry"
+    }
+  }
+}

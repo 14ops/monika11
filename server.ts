@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,6 +85,48 @@ async function startServer() {
   // Simple status endpoint
   app.get('/api/status', (req, res) => {
     res.json({ ok: true, message: 'Just Monika Server is running' });
+  });
+
+  // Memory Vault (Obsidian Integration)
+  const VAULT_PATH = path.join(__dirname, 'marihacks', 'demo_vault');
+
+  app.get('/api/vault/list', (req, res) => {
+    try {
+      if (!fs.existsSync(VAULT_PATH)) {
+        return res.json({ files: [] });
+      }
+      const files = fs.readdirSync(VAULT_PATH)
+        .filter(file => file.endsWith('.md'))
+        .map(file => ({
+          name: file.replace('.md', ''),
+          path: file,
+          mtime: fs.statSync(path.join(VAULT_PATH, file)).mtime
+        }));
+      res.json({ files });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/vault/read', (req, res) => {
+    const filePath = req.query.path as string;
+    if (!filePath) return res.status(400).json({ error: 'Path required' });
+
+    const fullPath = path.join(VAULT_PATH, filePath);
+    // Security: Ensure path is within vault
+    if (!fullPath.startsWith(VAULT_PATH)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    try {
+      if (!fs.existsSync(fullPath)) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      const content = fs.readFileSync(fullPath, 'utf8');
+      res.json({ content });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // ElevenLabs TTS Proxy
