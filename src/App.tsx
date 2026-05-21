@@ -25,11 +25,58 @@ interface Task {
   updatedAt: any;
 }
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
 // Initialize Firebase
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 const googleProvider = new GoogleAuthProvider();
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid || null,
+      email: auth.currentUser?.email || null,
+      emailVerified: auth.currentUser?.emailVerified || null,
+      isAnonymous: auth.currentUser?.isAnonymous || null,
+      tenantId: auth.currentUser?.tenantId || null,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export default function App() {
   const [messages, setMessages] = useState<any[]>([]);
@@ -279,20 +326,85 @@ export default function App() {
   const [vaultContent, setVaultContent] = useState<string | null>(null);
   const [showVault, setShowVault] = useState(false);
 
-  const MiniPanelHeader = ({ title, minimized, onToggle, icon: Icon }: { title: string, minimized: boolean, onToggle: () => void, icon?: any }) => (
+  const t = React.useCallback((key: keyof typeof translations['en']) => {
+    return translations[lang][key] || translations['en'][key];
+  }, [lang]);
+
+  const [panelStates, setPanelStates] = useState(() => {
+    const saved = localStorage.getItem('monika_ui_panels');
+    const defaultStates = {
+      isConstellationMinimized: false,
+      isSidebarMinimized: false,
+      isConsoleMinimized: false,
+      isHudMinimized: false,
+      isIntegrityMinimized: false,
+      isIdentityMinimized: false,
+      isVisionMinimized: false,
+      isDirectivesMinimized: false,
+      isLogMinimized: false,
+      isStatusMinimized: false,
+      isSwarmMinimized: false,
+      isMutationMinimized: false,
+      isWorkflowMinimized: false,
+      isPredictionMinimized: false,
+      isSourcesMinimized: false,
+      isHudFooterMinimized: false,
+    };
+    return saved ? { ...defaultStates, ...JSON.parse(saved) } : defaultStates;
+  });
+
+  const setPanelState = React.useCallback((key: string, value: boolean) => {
+    setPanelStates(prev => {
+      const next = { ...prev, [key as keyof typeof prev]: value };
+      localStorage.setItem('monika_ui_panels', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const togglePanel = React.useCallback((key: string) => {
+    setPanelStates(prev => {
+      const next = { ...prev, [key as keyof typeof prev]: !prev[key as keyof typeof prev] };
+      localStorage.setItem('monika_ui_panels', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const MiniPanelHeader = ({ title, minimized, onToggle, icon: Icon, actions }: { title: string, minimized: boolean, onToggle: () => void, icon?: any, actions?: React.ReactNode }) => (
     <div className="flex items-center justify-between border-b border-border/40 pb-2 mb-3 select-none">
       <div className="flex items-center gap-2">
         {Icon && <Icon size={12} className="text-accent" />}
         <span className="text-[10px] text-accent uppercase tracking-widest font-bold border-l-2 border-accent pl-2 leading-none">{title}</span>
       </div>
-      <button 
-        onClick={onToggle}
-        className="p-1 hover:bg-white/10 rounded-xs transition-colors group"
-      >
-        {minimized ? <Square size={10} className="text-accent group-hover:scale-110 transition-transform" /> : <Minus size={10} className="text-text-dim group-hover:text-accent group-hover:scale-110 transition-transform" />}
-      </button>
+      <div className="flex items-center gap-2">
+        {!minimized && actions}
+        <button 
+          onClick={onToggle}
+          className="p-1 hover:bg-white/10 rounded-xs transition-colors group"
+        >
+          {minimized ? <Square size={10} className="text-accent group-hover:scale-110 transition-transform" /> : <Minus size={10} className="text-text-dim group-hover:text-accent group-hover:scale-110 transition-transform" />}
+        </button>
+      </div>
     </div>
   );
+  const CollapsiblePanel = React.useCallback(({ title, id, icon, actions, children, height = 'auto', className = "" }: { title: string, id: string, icon?: any, actions?: React.ReactNode, children: React.ReactNode, height?: string | number, className?: string }) => {
+    const minimized = panelStates[id as keyof typeof panelStates];
+    return (
+      <div 
+        style={{ height: minimized ? '34px' : height }}
+        className={`bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden transition-all duration-300 ${className}`}
+      >
+        <MiniPanelHeader 
+          title={title} 
+          minimized={minimized} 
+          onToggle={() => togglePanel(id)} 
+          icon={icon}
+          actions={actions}
+        />
+        {!minimized && children}
+      </div>
+    );
+  }, [panelStates, togglePanel, t]);
+
   const [isSyncingVault, setIsSyncingVault] = useState(false);
 
   // Resize State
@@ -300,22 +412,6 @@ export default function App() {
   const [hudWidth, setHudWidth] = useState(280);
   const [consoleHeight, setConsoleHeight] = useState(300);
   const [constellationHeight, setConstellationHeight] = useState(0); // 0 means flex-1
-  const [isConstellationMinimized, setIsConstellationMinimized] = useState(false);
-  const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
-  const [isConsoleMinimized, setIsConsoleMinimized] = useState(false);
-  const [isHudMinimized, setIsHudMinimized] = useState(false);
-  const [isIntegrityMinimized, setIsIntegrityMinimized] = useState(false);
-  const [isIdentityMinimized, setIsIdentityMinimized] = useState(false);
-  const [isVisionMinimized, setIsVisionMinimized] = useState(false);
-  const [isDirectivesMinimized, setIsDirectivesMinimized] = useState(false);
-  const [isLogMinimized, setIsLogMinimized] = useState(false);
-  const [isStatusMinimized, setIsStatusMinimized] = useState(false);
-  const [isSwarmMinimized, setIsSwarmMinimized] = useState(false);
-  const [isMutationMinimized, setIsMutationMinimized] = useState(false);
-  const [isWorkflowMinimized, setIsWorkflowMinimized] = useState(false);
-  const [isPredictionMinimized, setIsPredictionMinimized] = useState(false);
-  const [isSourcesMinimized, setIsSourcesMinimized] = useState(false);
-  const [isHudFooterMinimized, setIsHudFooterMinimized] = useState(false);
 
   // Internal Heights
   const [integrityHeight, setIntegrityHeight] = useState(160);
@@ -335,6 +431,39 @@ export default function App() {
       setTasks([]);
       return;
     }
+    if (user.uid === 'guest_local_user') {
+      const savedTasks = localStorage.getItem('monika_local_tasks');
+      if (savedTasks) {
+        setTasks(JSON.parse(savedTasks));
+      } else {
+        const initialTasks: Task[] = [
+          {
+            id: 'local_task_1',
+            title: 'Verify Monika Systems Integration',
+            description: 'Check active LLMs and neural weight coherence in the constellation view.',
+            priority: 'critical',
+            status: 'pending',
+            userId: 'guest_local_user',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          },
+          {
+            id: 'local_task_2',
+            title: 'Analyze Recursion Stack Trace',
+            description: 'Review Recursion note in the Knowledge Base and draw a call stack.',
+            priority: 'high',
+            status: 'completed',
+            userId: 'guest_local_user',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        ];
+        setTasks(initialTasks);
+        localStorage.setItem('monika_local_tasks', JSON.stringify(initialTasks));
+      }
+      return;
+    }
+
     const q = query(collection(db, 'tasks'), where('userId', '==', user.uid));
     const unsubTasks = onSnapshot(q, (snapshot) => {
       const taskList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task));
@@ -346,7 +475,7 @@ export default function App() {
         return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
       }));
     }, (error) => {
-      console.error("Firestore Error:", error);
+      handleFirestoreError(error, OperationType.LIST, 'tasks');
     });
     return () => unsubTasks();
   }, [user]);
@@ -354,15 +483,52 @@ export default function App() {
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error("Login failed:", error);
+    } catch (error: any) {
+      console.warn("Firebase sign-in failed, activating offline local guest mode fallback:", error);
+      
+      setUser({
+        uid: 'guest_local_user',
+        displayName: 'Guest Operator',
+        email: 'guest@monika.os',
+        emailVerified: true
+      } as User);
+      
+      const neuralLog = document.getElementById('system-console-log');
+      if (neuralLog) {
+        const entry = document.createElement('div');
+        entry.className = "text-[#ff7e7e] font-mono text-[9px] mt-1";
+        entry.innerText = `>> AUTH_WARNING: CLOUD_SIGNIN_ERROR [${error.code || 'internal-error'}]. ACTIVE_OFFLINE_MODE`;
+        neuralLog.appendChild(entry);
+        neuralLog.scrollTop = neuralLog.scrollHeight;
+      }
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => {
+    setUser(null);
+    signOut(auth);
+  };
 
   const addTask = async () => {
     if (!user || !newTask.title.trim()) return;
+    if (user.uid === 'guest_local_user') {
+      const task: Task = {
+        id: 'local_task_' + Math.random().toString(36).substr(2, 9),
+        title: newTask.title,
+        description: newTask.description,
+        priority: newTask.priority,
+        status: 'pending',
+        userId: 'guest_local_user',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const nextTasks = [task, ...tasks];
+      setTasks(nextTasks);
+      localStorage.setItem('monika_local_tasks', JSON.stringify(nextTasks));
+      setNewTask({ title: "", description: "", priority: "medium" });
+      setIsTaskModalOpen(false);
+      return;
+    }
     try {
       await addDoc(collection(db, 'tasks'), {
         ...newTask,
@@ -374,29 +540,42 @@ export default function App() {
       setNewTask({ title: "", description: "", priority: "medium" });
       setIsTaskModalOpen(false);
     } catch (error) {
-      console.error("Add task failed:", error);
+      handleFirestoreError(error, OperationType.CREATE, 'tasks');
     }
   };
 
   const updateTaskStatus = async (taskId: string, status: Task['status']) => {
+    if (user?.uid === 'guest_local_user') {
+      const nextTasks = tasks.map(t => t.id === taskId ? { ...t, status, updatedAt: new Date().toISOString() } : t);
+      setTasks(nextTasks);
+      localStorage.setItem('monika_local_tasks', JSON.stringify(nextTasks));
+      return;
+    }
     try {
       await updateDoc(doc(db, 'tasks', taskId), {
         status,
         updatedAt: serverTimestamp()
       });
     } catch (error) {
-      console.error("Update task failed:", error);
+      handleFirestoreError(error, OperationType.UPDATE, `tasks/${taskId}`);
     }
   };
 
   const deleteLevelTask = async (taskId: string) => {
     if (!window.confirm("Purge this directive from neural memory?")) return;
+    if (user?.uid === 'guest_local_user') {
+      const nextTasks = tasks.filter(t => t.id !== taskId);
+      setTasks(nextTasks);
+      localStorage.setItem('monika_local_tasks', JSON.stringify(nextTasks));
+      return;
+    }
     try {
       await deleteDoc(doc(db, 'tasks', taskId));
     } catch (error) {
-      console.error("Delete task failed:", error);
+      handleFirestoreError(error, OperationType.DELETE, `tasks/${taskId}`);
     }
   };
+
   useEffect(() => {
     fetchVaultFiles();
   }, []);
@@ -405,10 +584,31 @@ export default function App() {
     setIsSyncingVault(true);
     try {
       const res = await fetch('/api/vault/list');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setVaultFiles(data.files || []);
     } catch (e) {
-      console.error("Vault sync failed", e);
+      console.warn("Vault sync API unreachable, falling back to cached/local mock files:", e);
+      setVaultFiles([
+        {
+          name: "00 Welcome",
+          path: "00 Welcome.md",
+          mtime: "2026-05-21T13:12:10.000Z",
+          content: `---\ntags: [meta]\n---\n\n# Welcome to your Monika vault\n\nThis is a seed vault Monika will read from. She will not give you answers. She will quiz you on what you have written here.\n\n## How it works\n\n- Every note is chunked by heading and embedded into Monika\'s memory.\n- When you ask a question, Monika pulls the relevant chunks and asks you about them.\n- Edit any note and the constellation view will light up the memory galaxy as it reindexes.\n\n## Try this first\n\n1. Open the Monika chat pane from the left ribbon.\n2. Ask something vague like "explain recursion for me".\n3. Watch the reasoning validator score drop and Monika push back.\n4. Try again with evidence of effort. Watch the effort score climb.\n`
+        },
+        {
+          name: "Recursion",
+          path: "Recursion.md",
+          mtime: "2026-05-21T13:12:10.000Z",
+          content: `---\ntags: [cs, fundamentals]\n---\n\n# Recursion\n\nA recursive function calls itself with a smaller subproblem until it hits a base case.\n\n## Base case\n\nThe condition that stops the recursion. Without it, the stack overflows.\n\n## Recursive case\n\nThe step that reduces the problem size and hands off to the same function.\n\n## Classic example: factorial\n\n\`\`\`python\ndef fact(n):\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n\`\`\`\n\n## Where my understanding breaks\n\nI understand the base case but I keep getting confused on how the stack unwinds. I drew a trace on paper for fact(4) and it helps, but I still struggle with mutual recursion.\n`
+        },
+        {
+          name: "Study log 2026-04-18",
+          path: "Study log 2026-04-18.md",
+          mtime: "2026-05-21T13:12:10.000Z",
+          content: `---\ntags: [journal]\n---\n\n# Study log 2026-04-18\n\nWorked on dynamic programming for 90 minutes. Climbing stairs problem.\n\n## What I tried\n\n- Brute-force recursive solution. Worked for n=5, TLE for n=40.\n- Added a dict memo. Shaved runtime to milliseconds.\n- Converted to bottom-up tabulation. Cleaner, no recursion.\n\n## Where I am stuck\n\nCoin change with unlimited supply. I see it is similar to climbing stairs but the order-independence rule is throwing me off. Need to figure out why looping over coins in the outer loop prevents double-counting.\n`
+        }
+      ]);
     } finally {
       setIsSyncingVault(false);
     }
@@ -417,12 +617,22 @@ export default function App() {
   const readVaultFile = async (file: any) => {
     setSelectedVaultFile(file);
     setVaultContent(null);
+    if (file.content) {
+      setVaultContent(file.content);
+      return;
+    }
     try {
       const res = await fetch(`/api/vault/read?path=${encodeURIComponent(file.path)}`);
       const data = await res.json();
       setVaultContent(data.content);
     } catch (e) {
-      console.error("Vault read failed", e);
+      console.warn("Vault read failed, loading fallback content", e);
+      const fallbackFiles: Record<string, string> = {
+        "00 Welcome.md": `---\ntags: [meta]\n---\n\n# Welcome to your Monika vault\n\nThis is a seed vault Monika will read from. She will not give you answers. She will quiz you on what you have written here.\n\n## How it works\n\n- Every note is chunked by heading and embedded into Monika\'s memory.\n- When you ask a question, Monika pulls the relevant chunks and asks you about them.\n- Edit any note and the constellation view will light up the memory galaxy as it reindexes.\n\n## Try this first\n\n1. Open the Monika chat pane from the left ribbon.\n2. Ask something vague like "explain recursion for me".\n3. Watch the reasoning validator score drop and Monika push back.\n4. Try again with evidence of effort. Watch the effort score climb.\n`,
+        "Recursion.md": `---\ntags: [cs, fundamentals]\n---\n\n# Recursion\n\nA recursive function calls itself with a smaller subproblem until it hits a base case.\n\n## Base case\n\nThe condition that stops the recursion. Without it, the stack overflows.\n\n## Recursive case\n\nThe step that reduces the problem size and hands off to the same function.\n\n## Classic example: factorial\n\n\`\`\`python\ndef fact(n):\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\n\`\`\`\n\n## Where my understanding breaks\n\nI understand the base case but I keep getting confused on how the stack unwinds. I drew a trace on paper for fact(4) and it helps, but I still struggle with mutual recursion.\n`,
+        "Study log 2026-04-18.md": `---\ntags: [journal]\n---\n\n# Study log 2026-04-18\n\nWorked on dynamic programming for 90 minutes. Climbing stairs problem.\n\n## What I tried\n\n- Brute-force recursive solution. Worked for n=5, TLE for n=40.\n- Added a dict memo. Shaved runtime to milliseconds.\n- Converted to bottom-up tabulation. Cleaner, no recursion.\n\n## Where I am stuck\n\nCoin change with unlimited supply. I see it is similar to climbing stairs but the order-independence rule is throwing me off. Need to figure out why looping over coins in the outer loop prevents double-counting.\n`
+      };
+      setVaultContent(fallbackFiles[file.path] || `# File Not Found\nCould not fetch content for ${file.name}.`);
     }
   };
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -509,10 +719,6 @@ export default function App() {
       }, '*');
     }
   }, [lang, isFractalMode, isLobsterMode, activeNodes, isEvolverMode, agents]);
-
-  const t = (key: keyof typeof translations['en']) => {
-    return translations[lang][key] || translations['en'][key];
-  };
 
   const ai = new GoogleGenAI({ apiKey: geminiKey || process.env.GEMINI_API_KEY });
 
@@ -1184,12 +1390,12 @@ export default function App() {
       )}
       {/* Sidebar: Agents & Stats */}
       <div 
-        style={{ width: isSidebarMinimized ? 40 : sidebarWidth }}
+        style={{ width: panelStates.isSidebarMinimized ? 40 : sidebarWidth }}
         className="flex flex-col bg-panel border-r border-border rounded-sm px-4 pt-4 pb-2 gap-0 z-40 shrink-0 relative overflow-hidden transition-all duration-300"
       >
-        {isSidebarMinimized ? (
+        {panelStates.isSidebarMinimized ? (
           <div className="flex flex-col items-center gap-6 py-2">
-            <button onClick={() => setIsSidebarMinimized(false)} className="text-accent hover:scale-110 transition-transform">
+            <button onClick={() => setPanelState('isSidebarMinimized', false)} className="text-accent hover:scale-110 transition-transform">
               <Plus size={20} />
             </button>
             <div className="rotate-90 origin-left whitespace-nowrap text-[10px] text-accent font-bold tracking-widest mt-12 opacity-40">
@@ -1219,7 +1425,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <div className="text-[10px] text-text-dim font-mono">v2.4.0</div>
                 <button 
-                  onClick={() => setIsSidebarMinimized(true)}
+                  onClick={() => togglePanel('isSidebarMinimized')}
                   className="p-1 hover:bg-white/5 rounded-xs text-text-dim hover:text-accent transition-colors"
                 >
                   <Minus size={12} />
@@ -1227,134 +1433,131 @@ export default function App() {
               </div>
             </header>
             <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-0 custom-scrollbar">
-            <div style={{ height: isIntegrityMinimized ? '30px' : integrityHeight }} className={`flex flex-col gap-4 shrink-0 mb-4 overflow-hidden relative transition-all duration-300`}>
-              <MiniPanelHeader title="System Integrity" minimized={isIntegrityMinimized} onToggle={() => setIsIntegrityMinimized(!isIntegrityMinimized)} icon={Cpu} />
-              {!isIntegrityMinimized && (
-                <div className="flex-1 bg-black/20 border border-border rounded-sm p-4 flex flex-col gap-2 relative overflow-hidden group transition-all hover:border-accent/40">
-                  <div className="absolute inset-0 pointer-events-none stroke-accent opacity-5">
-                    <svg className="w-full h-full"><line x1="0" y1="100%" x2="100%" y2="0" stroke="currentColor" strokeWidth="1" /></svg>
-                  </div>
-                  <motion.div 
-                    animate={isLoading ? { scale: [1, 1.05, 1] } : {}}
-                    transition={{ repeat: Infinity, duration: 2 }}
-                    className="relative w-24 h-24 mx-auto z-10"
-                  >
-                    <svg className="w-full h-full transform -rotate-90">
-                      <circle
-                        cx="48" cy="48" r="42"
-                        stroke="currentColor" strokeWidth="6" fill="transparent"
-                        className="text-border"
-                      />
-                      <motion.circle
-                        cx="48" cy="48" r="42"
-                        stroke="#ff7eb9" strokeWidth="6" fill="transparent"
-                        strokeDasharray="263.9"
-                        animate={{ strokeDashoffset: 263.9 - (263.9 * (isLoading ? progress : 100)) / 100 }}
-                        transition={{ type: 'spring', damping: 20 }}
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-accent">
-                      {status === 'STANDBY' ? 'READY' : `${progress}%`}
-                    </div>
-                  </motion.div>
-                  <p className="text-center text-[10px] uppercase tracking-wider text-text-dim mt-1 z-10 font-bold opacity-80">Sync Stability</p>
-                </div>
-              )}
-              {!isIntegrityMinimized && (
-                <div 
-                   onMouseDown={() => startResizing(handleIntegrityResize)}
-                   className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
-                />
-              )}
-            </div>
-
-            <div 
-               onMouseDown={() => startResizing(handleIntegrityResize)}
-               className="h-2 w-full cursor-row-resize hover:bg-accent/20 group flex items-center mb-4 shrink-0"
+            
+            <CollapsiblePanel 
+              title="System Integrity" 
+              id="isIntegrityMinimized" 
+              icon={Cpu} 
+              height={integrityHeight} 
+              className="mb-4"
             >
-              <div className="w-full h-[1px] bg-border group-hover:bg-accent" />
-            </div>
-
-            <div style={{ height: isIdentityMinimized ? '30px' : identityHeight }} className="flex flex-col gap-2 shrink-0 mb-4 overflow-hidden relative group transition-all duration-300">
-              <MiniPanelHeader title={t('core_identity')} minimized={isIdentityMinimized} onToggle={() => setIsIdentityMinimized(!isIdentityMinimized)} icon={Brain} />
-              {!isIdentityMinimized && (
-                <div className="flex-1 overflow-y-auto pr-1">
-                  <StatRow label={t('status').toUpperCase()} value={status} color={status === 'done' ? '#00ff41' : status === 'thinking' ? '#ff7eb9' : '#6b6b7a'} />
-                  <StatRow label={t('emotion').toUpperCase()} value={stats.emotion || "—"} />
-                  <div className="flex justify-between items-center text-[11px] py-1 border-bottom border-border mb-0.5">
-                    <div className="flex flex-col">
-                      <span className="text-text-dim uppercase tracking-tighter uppercase">{t('voice_mode')}</span>
-                      {isSynthesizing && (
-                        <motion.span 
-                          initial={{ opacity: 0 }} 
-                          animate={{ opacity: 1 }} 
-                          className="text-[8px] text-accent font-bold animate-pulse"
-                        >
-                          SYNTHESIZING...
-                        </motion.span>
-                      )}
-                    </div>
-                    <button 
-                      onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
-                      className={`w-8 h-4 rounded-full relative transition-colors ${isVoiceEnabled ? 'bg-accent' : 'bg-border'}`}
-                    >
-                      <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isVoiceEnabled ? 'left-4.5' : 'left-0.5'}`} />
-                    </button>
-                  </div>
-                  <StatRow label={t('latency').toUpperCase()} value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : "—"} />
-                  <StatRow label={t('tokens').toUpperCase()} value={stats.tokens || "—"} />
+              <div className="flex-1 bg-black/20 border border-border rounded-sm p-4 flex flex-col gap-2 relative overflow-hidden group transition-all hover:border-accent/40">
+                <div className="absolute inset-0 pointer-events-none stroke-accent opacity-5">
+                  <svg className="w-full h-full"><line x1="0" y1="100%" x2="100%" y2="0" stroke="currentColor" strokeWidth="1" /></svg>
                 </div>
-              )}
-              {!isIdentityMinimized && (
-                <div 
-                   onMouseDown={() => startResizing(handleIdentityResize)}
-                   className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
-                />
-              )}
-            </div>
-
-            {/* Neural Vision Port */}
-            <div style={{ height: isVisionMinimized ? '30px' : visionHeight }} className="flex flex-col gap-4 shrink-0 mb-4 overflow-hidden relative transition-all duration-300">
-              <MiniPanelHeader title={t('vision_port')} minimized={isVisionMinimized} onToggle={() => setIsVisionMinimized(!isVisionMinimized)} icon={Camera} />
-              {!isVisionMinimized && (
-                <>
-                  <div className="flex-1 bg-black border border-border rounded-sm relative overflow-hidden group shadow-inner">
-                    <video 
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      className={`w-full h-full object-cover transition-opacity duration-500 ${visionActive ? 'opacity-80 grayscale' : 'opacity-0'}`}
+                <motion.div 
+                  animate={isLoading ? { scale: [1, 1.05, 1] } : {}}
+                  transition={{ repeat: Infinity, duration: 2 }}
+                  className="relative w-24 h-24 mx-auto z-10"
+                >
+                  <svg className="w-full h-full transform -rotate-90">
+                    <circle
+                      cx="48" cy="48" r="42"
+                      stroke="currentColor" strokeWidth="6" fill="transparent"
+                      className="text-border"
                     />
-                    {!visionActive && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-text-dim">
-                        <Camera size={24} className="opacity-20" />
-                        <span className="text-[9px] font-mono tracking-widest opacity-40">{t('offline_feed')}</span>
-                      </div>
-                    )}
-                    {visionActive && (
-                      <div className="absolute top-2 right-2 flex flex-col items-end gap-1 pointer-events-none">
-                        <div className="text-[8px] bg-accent/20 text-accent px-1 font-mono">{t('optical_mode')}</div>
-                        <div className="text-[8px] bg-black/60 text-text-main px-1 font-mono uppercase">{t('live_feed')}</div>
-                        {isPulseProcessing && (
-                          <motion.div 
-                            initial={{ opacity: 0 }} 
-                            animate={{ opacity: 1 }} 
-                            className="text-[8px] bg-accent/30 text-accent px-1 font-mono animate-pulse border border-accent/40"
-                          >
-                            :: {t('pulse_scanning')}
-                          </motion.div>
-                        )}
-                      </div>
-                    )}
-                    <canvas ref={canvasRef} className="hidden" />
-                    <div className="absolute inset-0 pointer-events-none border border-accent/10" />
+                    <motion.circle
+                      cx="48" cy="48" r="42"
+                      stroke="#ff7eb9" strokeWidth="6" fill="transparent"
+                      strokeDasharray="263.9"
+                      animate={{ strokeDashoffset: 263.9 - (263.9 * (isLoading ? progress : 100)) / 100 }}
+                      transition={{ type: 'spring', damping: 20 }}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-accent">
+                    {status === 'STANDBY' ? 'READY' : `${progress}%`}
                   </div>
-                  <div 
-                     onMouseDown={() => startResizing(handleVisionResize)}
-                     className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
-                  />
-                </>
-              )}
+                </motion.div>
+                <p className="text-center text-[10px] uppercase tracking-wider text-text-dim mt-1 z-10 font-bold opacity-80">Sync Stability</p>
+              </div>
+              <div 
+                 onMouseDown={() => startResizing(handleIntegrityResize)}
+                 className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
+              />
+            </CollapsiblePanel>
+
+            <CollapsiblePanel 
+              title={t('core_identity')} 
+              id="isIdentityMinimized" 
+              icon={Brain} 
+              height={identityHeight} 
+              className="mb-4"
+            >
+              <div className="flex-1 overflow-y-auto pr-1">
+                <StatRow label={t('status').toUpperCase()} value={status} color={status === 'done' ? '#00ff41' : status === 'thinking' ? '#ff7eb9' : '#6b6b7a'} />
+                <StatRow label={t('emotion').toUpperCase()} value={stats.emotion || "—"} />
+                <div className="flex justify-between items-center text-[11px] py-1 border-bottom border-border mb-0.5">
+                  <div className="flex flex-col">
+                    <span className="text-text-dim uppercase tracking-tighter uppercase">{t('voice_mode')}</span>
+                    {isSynthesizing && (
+                      <motion.span 
+                        initial={{ opacity: 0 }} 
+                        animate={{ opacity: 1 }} 
+                        className="text-[8px] text-accent font-bold animate-pulse"
+                      >
+                        SYNTHESIZING...
+                      </motion.span>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => setIsVoiceEnabled(!isVoiceEnabled)}
+                    className={`w-8 h-4 rounded-full relative transition-colors ${isVoiceEnabled ? 'bg-accent' : 'bg-border'}`}
+                  >
+                    <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isVoiceEnabled ? 'left-4.5' : 'left-0.5'}`} />
+                  </button>
+                </div>
+                <StatRow label={t('latency').toUpperCase()} value={stats.latency ? `${(stats.latency / 1000).toFixed(1)}s` : "—"} />
+                <StatRow label={t('tokens').toUpperCase()} value={stats.tokens || "—"} />
+              </div>
+              <div 
+                 onMouseDown={() => startResizing(handleIdentityResize)}
+                 className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
+              />
+            </CollapsiblePanel>
+
+            <CollapsiblePanel 
+              title={t('vision_port')} 
+              id="isVisionMinimized" 
+              icon={Camera} 
+              height={visionHeight} 
+              className="mb-4"
+            >
+              <div className="flex-1 bg-black border border-border rounded-sm relative overflow-hidden group shadow-inner">
+                <video 
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  className={`w-full h-full object-cover transition-opacity duration-500 ${visionActive ? 'opacity-80 grayscale' : 'opacity-0'}`}
+                />
+                {!visionActive && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-text-dim">
+                    <Camera size={24} className="opacity-20" />
+                    <span className="text-[9px] font-mono tracking-widest opacity-40">{t('offline_feed')}</span>
+                  </div>
+                )}
+                {visionActive && (
+                  <div className="absolute top-2 right-2 flex flex-col items-end gap-1 pointer-events-none">
+                    <div className="text-[8px] bg-accent/20 text-accent px-1 font-mono">{t('optical_mode')}</div>
+                    <div className="text-[8px] bg-black/60 text-text-main px-1 font-mono uppercase">{t('live_feed')}</div>
+                    {isPulseProcessing && (
+                      <motion.div 
+                        initial={{ opacity: 0 }} 
+                        animate={{ opacity: 1 }} 
+                        className="text-[8px] bg-accent/30 text-accent px-1 font-mono animate-pulse border border-accent/40"
+                      >
+                        :: {t('pulse_scanning')}
+                      </motion.div>
+                    )}
+                  </div>
+                )}
+                <canvas ref={canvasRef} className="hidden" />
+                <div className="absolute inset-0 pointer-events-none border border-accent/10" />
+              </div>
+              <div 
+                 onMouseDown={() => startResizing(handleVisionResize)}
+                 className="absolute bottom-0 h-1 w-full cursor-row-resize hover:bg-accent/40 z-20"
+              />
+            </CollapsiblePanel>
             </div>
 
         <div 
@@ -1364,43 +1567,31 @@ export default function App() {
           <div className="w-full h-[1px] bg-border group-hover:bg-accent" />
         </div>
 
-        <div className="flex flex-col gap-2 flex-1 overflow-hidden transition-all duration-300" style={{ height: isSwarmMinimized ? '34px' : 'auto' }}>
-          <div className="flex items-center justify-between border-b border-border/40 pb-2 mb-1 select-none">
-            <div className="flex items-center gap-2">
-              <Sparkles size={12} className="text-accent" />
-              <span className="text-[10px] text-accent uppercase tracking-widest font-bold border-l-2 border-accent pl-2 leading-none">{t('agent_swarm')}</span>
-            </div>
-            <div className="flex gap-1 items-center">
-              {!isSwarmMinimized && (
-                <>
-                  <button 
-                    onClick={() => setShowMarketplace(true)}
-                    className="text-text-dim hover:text-accent transition-colors p-1"
-                    title={t('marketplace')}
-                  >
-                    <Sparkles size={12} />
-                  </button>
-                  <button 
-                    onClick={() => setShowNewAgentForm(true)}
-                    className="text-text-dim hover:text-accent transition-colors p-1"
-                    title={t('add_custom_agent')}
-                  >
-                    <Plus size={12} />
-                  </button>
-                </>
-              )}
+        <CollapsiblePanel 
+          title={t('agent_swarm')} 
+          id="isSwarmMinimized" 
+          icon={Sparkles}
+          className="flex-1 overflow-hidden"
+          actions={
+            <>
               <button 
-                onClick={() => setIsSwarmMinimized(!isSwarmMinimized)}
-                className="p-1 hover:bg-white/10 rounded-xs transition-colors"
-                title={isSwarmMinimized ? t('expand') : t('minimize')}
+                onClick={() => setShowMarketplace(true)}
+                className="text-text-dim hover:text-accent transition-colors p-1"
+                title={t('marketplace')}
               >
-                {isSwarmMinimized ? <Square size={10} className="text-accent" /> : <Minus size={10} className="text-text-dim" />}
+                <Sparkles size={12} />
               </button>
-            </div>
-          </div>
-          
-          {!isSwarmMinimized && (
-            <div className="flex flex-col gap-1 overflow-y-auto pr-1">
+              <button 
+                onClick={() => setShowNewAgentForm(true)}
+                className="text-text-dim hover:text-accent transition-colors p-1"
+                title={t('add_custom_agent')}
+              >
+                <Plus size={12} />
+              </button>
+            </>
+          }
+        >
+          <div className="flex flex-col gap-1 overflow-y-auto pr-1">
             <Reorder.Group axis="y" values={agents} onReorder={setAgents} className="flex flex-col gap-1">
               {agents.map(agent => (
                 <Reorder.Item 
@@ -1537,8 +1728,6 @@ export default function App() {
               ))}
             </Reorder.Group>
           </div>
-          )}
-        </div>
             <div className="mt-4 border-t border-border pt-4 flex flex-col gap-2">
               <div className="text-[10px] text-accent uppercase tracking-[1.5px] font-bold border-l-3 border-accent pl-2.5 mb-2 flex justify-between items-center w-full">
                 <span>{t('knowledge_base')}</span>
@@ -1709,7 +1898,7 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </CollapsiblePanel>
 
         <div className="mt-auto flex flex-col gap-2 pt-4 border-t border-border font-mono text-[10px] text-text-dim">
            <div className="flex items-center gap-2">
@@ -1741,28 +1930,28 @@ export default function App() {
         
         {/* Constellation Canvas (Console Area in theming) */}
         <div 
-          style={isConstellationMinimized ? { height: '36px' } : (constellationHeight > 0 ? { height: constellationHeight } : {})}
-          className={`bg-black border border-border rounded-sm relative overflow-hidden transition-all duration-300 ${constellationHeight === 0 && !isConstellationMinimized ? 'flex-1' : 'shrink-0'}`}
+          style={panelStates.isConstellationMinimized ? { height: '36px' } : (constellationHeight > 0 ? { height: constellationHeight } : {})}
+          className={`bg-black border border-border rounded-sm relative overflow-hidden transition-all duration-300 ${constellationHeight === 0 && !panelStates.isConstellationMinimized ? 'flex-1' : 'shrink-0'}`}
         >
            <div className="absolute top-3 left-4 z-20 text-[10px] text-accent uppercase tracking-widest font-bold border-l-3 border-accent pl-2.5 flex items-center gap-4">
              {t('constellation_view')}
              <button 
-               onClick={() => setIsConstellationMinimized(!isConstellationMinimized)}
+               onClick={() => setPanelState('isConstellationMinimized', !panelStates.isConstellationMinimized)}
                className="ml-2 px-1.5 py-0.5 border border-accent/30 text-[9px] hover:bg-accent/10 transition-colors rounded-xs"
              >
-               {isConstellationMinimized ? t('ready') : t('minimize')}
+               {panelStates.isConstellationMinimized ? t('ready') : t('minimize')}
              </button>
            </div>
 
            <iframe 
              ref={iframeRef}
              src="/marihacks/constellation.html" 
-             className={`w-full h-full border-none pointer-events-auto transition-opacity duration-300 ${isConstellationMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+             className={`w-full h-full border-none pointer-events-auto transition-opacity duration-300 ${panelStates.isConstellationMinimized ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
              title="Constellation Visualization"
            />
            
            {/* Bottom Resizer for Constellation */}
-           {!isConstellationMinimized && (
+           {!panelStates.isConstellationMinimized && (
              <div 
                onMouseDown={() => startResizing(handleConstellationResize)}
                className="absolute bottom-0 left-0 w-full h-2 cursor-row-resize hover:bg-accent/40 z-30 group"
@@ -1781,12 +1970,12 @@ export default function App() {
 
         {/* Console / Chat UI */}
         <div 
-          style={{ height: isConsoleMinimized ? '34px' : consoleHeight }}
+          style={{ height: panelStates.isConsoleMinimized ? '34px' : consoleHeight }}
           className="bg-panel border border-border rounded-sm flex flex-col px-4 pt-3 pb-4 relative overflow-hidden shrink-0 transition-all duration-300"
         >
-          <MiniPanelHeader title={t('system_console')} minimized={isConsoleMinimized} onToggle={() => setIsConsoleMinimized(!isConsoleMinimized)} icon={Terminal} />
+          <MiniPanelHeader title={t('system_console')} minimized={panelStates.isConsoleMinimized} onToggle={() => togglePanel('isConsoleMinimized')} icon={Terminal} />
           
-          {!isConsoleMinimized && (
+          {!panelStates.isConsoleMinimized && (
             <div className="flex-1 mt-1 flex flex-col gap-2 overflow-y-auto font-mono text-[13px] bg-black/40 border border-border/50 p-4">
                <div className="text-text-dim flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-accent animate-ping" />
@@ -1811,7 +2000,7 @@ export default function App() {
             </div>
           )}
 
-          {!isConsoleMinimized && (
+          {!panelStates.isConsoleMinimized && (
             <div className="mt-4 flex flex-col gap-2">
               {isListening && (
                 <motion.div 
@@ -1892,12 +2081,12 @@ export default function App() {
 
       {/* Right HUD Overlay (Memory Hits / Log) */}
       <div 
-        style={{ width: isHudMinimized ? 40 : hudWidth }}
+        style={{ width: panelStates.isHudMinimized ? 40 : hudWidth }}
         className="flex flex-col gap-5 shrink-0 z-40 relative overflow-hidden transition-all duration-300"
       >
-        {isHudMinimized ? (
+        {panelStates.isHudMinimized ? (
           <div className="flex flex-col items-center gap-6 py-4 bg-panel h-full border-l border-border">
-            <button onClick={() => setIsHudMinimized(false)} className="text-accent hover:scale-110 transition-transform">
+            <button onClick={() => setPanelState('isHudMinimized', false)} className="text-accent hover:scale-110 transition-transform">
               <Plus size={20} />
             </button>
             <div className="rotate-90 origin-left whitespace-nowrap text-[10px] text-accent font-bold tracking-widest mt-12 opacity-40">
@@ -1916,370 +2105,336 @@ export default function App() {
 
             <div className="flex flex-col gap-5 flex-1 overflow-y-auto pr-1 custom-scrollbar">
               {/* Active Directives (Tasks) */}
-              <div 
-                style={{ height: isDirectivesMinimized ? '34px' : 'auto' }}
-                className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-3 shrink-0 overflow-hidden transition-all duration-300"
+              <CollapsiblePanel 
+                title={t('directives')} 
+                id="isDirectivesMinimized" 
+                icon={ShieldAlert}
+                actions={
+                  <button 
+                    onClick={() => user ? setIsTaskModalOpen(true) : handleLogin()}
+                    className="text-[8px] bg-accent/20 px-1.5 py-0.5 rounded-xs hover:bg-accent hover:text-black transition-all flex items-center gap-1 font-bold"
+                  >
+                    <Plus size={10} /> {t('add')}
+                  </button>
+                }
               >
-                <div className="flex items-center justify-between border-b border-border/40 pb-2 mb-1 select-none">
-                  <div className="flex items-center gap-2">
-                    <ShieldAlert size={12} className="text-accent" />
-                    <span className="text-[10px] text-accent uppercase tracking-widest font-bold border-l-2 border-accent pl-2 leading-none">{t('directives')}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!isDirectivesMinimized && (
-                      <button 
-                        onClick={() => user ? setIsTaskModalOpen(true) : handleLogin()}
-                        className="text-[8px] bg-accent/20 px-1.5 py-0.5 rounded-xs hover:bg-accent hover:text-black transition-all flex items-center gap-1 font-bold"
-                      >
-                        <Plus size={10} /> {t('add')}
-                      </button>
-                    )}
-                    <button 
-                      onClick={() => setIsDirectivesMinimized(!isDirectivesMinimized)}
-                      className="p-1 hover:bg-white/10 rounded-xs transition-colors"
-                    >
-                      {isDirectivesMinimized ? <Square size={10} className="text-accent" /> : <Minus size={10} className="text-text-dim" />}
-                    </button>
-                  </div>
-                </div>
-                
-                {!isDirectivesMinimized && (
-                  <div className="flex flex-col gap-2 overflow-y-auto max-h-[300px] pr-1 custom-scrollbar">
-                    {tasks.length === 0 ? (
-                      <div className="text-[9px] text-text-dim italic text-center py-4 border border-dashed border-border/30 rounded-xs">
-                        {t('no_directives')}
-                      </div>
-                    ) : (
-                      tasks.map(task => {
-                        const priorityConfig = {
-                          critical: { color: '#ff4d4d', icon: ShieldAlert, label: 'CRITICAL' },
-                          high: { color: '#ffa200', icon: AlertTriangle, label: 'HIGH' },
-                          medium: { color: '#3dfff3', icon: AlertCircle, label: 'MEDIUM' },
-                          low: { color: '#6b6b7a', icon: CheckCircle2, label: 'LOW' }
-                        };
-                        const config = priorityConfig[task.priority as keyof typeof priorityConfig] || priorityConfig.medium;
-                        const Icon = config.icon;
+                <div className="flex flex-col gap-2 overflow-y-auto max-h-[300px] pr-1 custom-scrollbar">
+                  {tasks.length === 0 ? (
+                    <div className="text-[9px] text-text-dim italic text-center py-4 border border-dashed border-border/30 rounded-xs">
+                      {t('no_directives')}
+                    </div>
+                  ) : (
+                    tasks.map(task => {
+                      const priorityConfig = {
+                        critical: { color: '#ff4d4d', icon: ShieldAlert, label: 'CRITICAL' },
+                        high: { color: '#ffa200', icon: AlertTriangle, label: 'HIGH' },
+                        medium: { color: '#3dfff3', icon: AlertCircle, label: 'MEDIUM' },
+                        low: { color: '#6b6b7a', icon: CheckCircle2, label: 'LOW' }
+                      };
+                      const config = priorityConfig[task.priority as keyof typeof priorityConfig] || priorityConfig.medium;
+                      const Icon = config.icon;
 
-                        return (
-                          <div 
-                            key={task.id} 
-                            className="group relative bg-black/40 border border-border/60 p-2.5 rounded-xs flex flex-col gap-1.5 hover:border-accent/40 transition-all border-l-4" 
-                            style={{ borderLeftColor: config.color }}
-                          >
-                            <div className="flex justify-between items-start gap-2">
-                              <div className="flex flex-col gap-1 min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 overflow-hidden">
-                                  <Icon size={12} style={{ color: config.color }} className="shrink-0" />
-                                  <span className={`text-[10px] font-bold uppercase tracking-wide truncate ${task.status === 'completed' ? 'line-through opacity-40' : 'text-text-main'}`}>
-                                    {task.title}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                   <span className="text-[7px] font-bold px-1 rounded-xs border" style={{ borderColor: `${config.color}40`, color: config.color, backgroundColor: `${config.color}10` }}>
-                                     {config.label}
-                                   </span>
-                                </div>
+                      return (
+                        <div 
+                          key={task.id} 
+                          className="group relative bg-black/40 border border-border/60 p-2.5 rounded-xs flex flex-col gap-1.5 hover:border-accent/40 transition-all border-l-4" 
+                          style={{ borderLeftColor: config.color }}
+                        >
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="flex flex-col gap-1 min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 overflow-hidden">
+                                <Icon size={12} style={{ color: config.color }} className="shrink-0" />
+                                <span className={`text-[10px] font-bold uppercase tracking-wide truncate ${task.status === 'completed' ? 'line-through opacity-40' : 'text-text-main'}`}>
+                                  {task.title}
+                                </span>
                               </div>
-                              <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button 
-                                  onClick={() => updateTaskStatus(task.id, task.status === 'completed' ? 'pending' : 'completed')}
-                                  className={`p-1 rounded-xs transition-all ${task.status === 'completed' ? 'bg-accent/20 text-accent' : 'bg-border/30 text-text-dim hover:text-accent'}`}
-                                >
-                                  <RefreshCw size={10} className={task.status === 'in_progress' ? 'animate-spin-slow' : ''} />
-                                </button>
-                                <button 
-                                  onClick={() => deleteLevelTask(task.id)}
-                                  className="p-1 rounded-xs bg-border/30 text-text-dim hover:text-red-500 transition-all"
-                                >
-                                  <Trash2 size={10} />
-                                </button>
+                              <div className="flex items-center gap-2">
+                                 <span className="text-[7px] font-bold px-1 rounded-xs border" style={{ borderColor: `${config.color}40`, color: config.color, backgroundColor: `${config.color}10` }}>
+                                   {config.label}
+                                 </span>
                               </div>
                             </div>
-                            {task.description && (
-                              <p className="text-[9px] text-text-dim line-clamp-2 leading-relaxed italic opacity-80 border-t border-border/20 pt-1 mt-1">
-                                {task.description}
-                              </p>
-                            )}
-                            <div className="flex justify-between items-center mt-1 text-[8px] font-mono">
-                              <span className="opacity-50 uppercase tracking-tighter">{task.status.replace('_', ' ')}</span>
-                              <span className="opacity-30">HEX_{task.id.slice(0, 4).toUpperCase()}</span>
+                            <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button 
+                                onClick={() => updateTaskStatus(task.id, task.status === 'completed' ? 'pending' : 'completed')}
+                                className={`p-1 rounded-xs transition-all ${task.status === 'completed' ? 'bg-accent/20 text-accent' : 'bg-border/30 text-text-dim hover:text-accent'}`}
+                              >
+                                <RefreshCw size={10} className={task.status === 'in_progress' ? 'animate-spin-slow' : ''} />
+                              </button>
+                              <button 
+                                onClick={() => deleteLevelTask(task.id)}
+                                className="p-1 rounded-xs bg-border/30 text-text-dim hover:text-red-500 transition-all"
+                              >
+                                <Trash2 size={10} />
+                              </button>
                             </div>
                           </div>
-                        );
-                      })
-                    )}
-                  </div>
-                )}
-              </div>
-
-        <div 
-          onMouseDown={() => startResizing(handleHudLogResize)}
-          className="h-2 w-full cursor-row-resize hover:bg-accent/20 group flex items-center shrink-0"
-        >
-          <div className="w-full h-[1px] bg-border group-hover:bg-accent" />
-        </div>
-
-              <div 
-                style={{ height: isLogMinimized ? '34px' : (hudLogHeight > 0 ? hudLogHeight : 'auto') }}
-                className={`flex-1 bg-panel border border-border rounded-sm p-4 flex flex-col overflow-hidden transition-all duration-300 ${hudLogHeight > 0 ? 'shrink-0' : ''}`}
-              >
-                <MiniPanelHeader title={t('interaction_log')} minimized={isLogMinimized} onToggle={() => setIsLogMinimized(!isLogMinimized)} icon={FileText} />
-                {!isLogMinimized && (
-                  <div className="flex flex-col gap-4 overflow-y-auto">
-                    {memoryHits.length === 0 && (
-                      <div className="text-[11px] text-text-dim border-l-2 border-border pl-2.5">
-                        <div className="text-[10px] opacity-50 mb-1">{new Date().toLocaleTimeString()}</div>
-                        {t('system_idle')}
-                      </div>
-                    )}
-                    {memoryHits.map((hit, i) => (
-                      <motion.div 
-                        key={i}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="group relative text-[11px] text-text-main border-l-2 border-accent/30 pl-2.5 py-1 hover:bg-accent/5 transition-all"
-                      >
-                        <div className="text-[10px] text-text-dim mb-1 flex justify-between items-center">
-                          <span>{new Date().toLocaleTimeString()}</span>
-                          <span className="text-[9px] bg-accent/10 px-1 rounded-xs border border-accent/20">{hit.source?.toUpperCase() || t('source')}</span>
+                          {task.description && (
+                            <p className="text-[9px] text-text-dim line-clamp-2 leading-relaxed italic opacity-80 border-t border-border/20 pt-1 mt-1">
+                              {task.description}
+                            </p>
+                          )}
+                          <div className="flex justify-between items-center mt-1 text-[8px] font-mono">
+                            <span className="opacity-50 uppercase tracking-tighter">{task.status.replace('_', ' ')}</span>
+                            <span className="opacity-30">HEX_{task.id.slice(0, 4).toUpperCase()}</span>
+                          </div>
                         </div>
-                        <div className="font-bold text-accent mb-1 flex justify-between items-center">
-                          <span>{hit.title}</span>
-                        </div>
-                        <div className={`text-text-dim text-[10px] ${hit.isFetching ? 'animate-pulse text-accent' : 'line-clamp-3'}`}>
-                          {hit.preview}
-                        </div>
-                        
-                        {/* Action Buttons Layer */}
-                        <div className="mt-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => handleReFetchMemory(hit)}
-                            disabled={hit.isFetching}
-                            className="flex-1 bg-accent/10 border border-accent/30 text-accent text-[8px] py-1 hover:bg-accent hover:text-black transition-all flex items-center justify-center gap-1 font-bold"
-                          >
-                            <RefreshCw size={8} /> {t('re_fetch')}
-                          </button>
-                          <button 
-                            onClick={() => setSelectedMemory(hit)}
-                            className="flex-1 border border-border text-text-dim text-[8px] py-1 hover:bg-white/10 transition-all flex items-center justify-center gap-1 font-bold"
-                          >
-                            <Maximize2 size={8} /> {t('details')}
-                          </button>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div 
-                style={{ height: isStatusMinimized ? '34px' : 'auto' }}
-                className="bg-panel border border-border rounded-sm p-4 font-mono text-[9px] text-text-dim flex flex-col gap-1 shrink-0 overflow-hidden transition-all duration-300"
-              >
-                  <MiniPanelHeader title="System Status" minimized={isStatusMinimized} onToggle={() => setIsStatusMinimized(!isStatusMinimized)} icon={Settings2} />
-                  {!isStatusMinimized && (
-                    <>
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-accent uppercase tracking-widest font-bold">Health Metrics</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#00ff41] animate-pulse"></span>
-                      </div>
-                      <div className="flex justify-between"><span>CPU_LOAD:</span><span>14%</span></div>
-                      <div className="flex justify-between"><span>MEM_USED:</span><span>882MB</span></div>
-                      <div className="flex justify-between"><span>TEMP_CORE:</span><span>42°C</span></div>
-                      <div className="flex justify-between uppercase text-[8px] mt-1 border-t border-border/20 pt-1">
-                        <span className="text-text-main">{t('recursive_mode')}</span>
-                        <button 
-                          onClick={() => setIsFractalMode(!isFractalMode)}
-                          className={`px-1.5 border ${isFractalMode ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
-                        >
-                          {isFractalMode ? 'ENABLED' : 'DISABLED'}
-                        </button>
-                      </div>
-                      <div className="flex justify-between uppercase text-[8px] mt-1">
-                        <span className="text-text-main">{t('lobster_mode')}</span>
-                        <button 
-                          onClick={() => setIsLobsterMode(!isLobsterMode)}
-                          className={`px-1.5 border ${isLobsterMode ? 'bg-[#ff4d4d]/20 border-[#ff4d4d] text-[#ff4d4d]' : 'border-border text-text-dim'}`}
-                        >
-                          {isLobsterMode ? 'ACTIVE' : 'IDLE'}
-                        </button>
-                      </div>
-                      <div className="flex justify-between uppercase text-[8px] mt-1">
-                        <span className="text-text-main">{t('evolver_mode')}</span>
-                        <button 
-                          onClick={() => setIsEvolverMode(!isEvolverMode)}
-                          className={`px-1.5 border ${isEvolverMode ? 'bg-[#00ff9d]/20 border-[#00ff9d] text-[#00ff9d]' : 'border-border text-text-dim'}`}
-                        >
-                          {isEvolverMode ? 'ENABLED' : 'DISABLED'}
-                        </button>
-                      </div>
-                      <div className="flex justify-between uppercase text-[8px] mt-1">
-                        <span className="text-text-main">{t('gepa_protocol')}</span>
-                        <button 
-                          onClick={() => setIsGepaActive(!isGepaActive)}
-                          className={`px-1.5 border ${isGepaActive ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
-                        >
-                          {isGepaActive ? 'ACTIVE' : 'OFFLINE'}
-                        </button>
-                      </div>
-                      <div className="flex justify-between uppercase text-[8px] mt-1">
-                        <span className="text-text-main">{t('synaptic_pruning')}</span>
-                        <button 
-                          onClick={() => setIsPruningActive(!isPruningActive)}
-                          className={`px-1.5 border ${isPruningActive ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
-                        >
-                          {isPruningActive ? 'READY' : 'STANDBY'}
-                        </button>
-                      </div>
-                      <div className="mt-2 text-[8px] opacity-30 break-all overflow-hidden h-3">S-UUID: f81e282d-802e-40f3-a708-3a95c9688373</div>
-                    </>
+                      );
+                    })
                   )}
+                </div>
+              </CollapsiblePanel>
+
+              <div 
+                onMouseDown={() => startResizing(handleHudLogResize)}
+                className="h-2 w-full cursor-row-resize hover:bg-accent/20 group flex items-center shrink-0"
+              >
+                <div className="w-full h-[1px] bg-border group-hover:bg-accent" />
               </div>
+
+              <CollapsiblePanel 
+                title={t('interaction_log')} 
+                id="isLogMinimized" 
+                icon={FileText} 
+                height={panelStates.isLogMinimized ? '34px' : (hudLogHeight > 0 ? hudLogHeight : 'auto')}
+                className={hudLogHeight > 0 ? 'shrink-0' : ''}
+              >
+                <div className="flex flex-col gap-4 overflow-y-auto">
+                  {memoryHits.length === 0 && (
+                    <div className="text-[11px] text-text-dim border-l-2 border-border pl-2.5">
+                      <div className="text-[10px] opacity-50 mb-1">{new Date().toLocaleTimeString()}</div>
+                      {t('system_idle')}
+                    </div>
+                  )}
+                  {memoryHits.map((hit, i) => (
+                    <motion.div 
+                      key={i}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="group relative text-[11px] text-text-main border-l-2 border-accent/30 pl-2.5 py-1 hover:bg-accent/5 transition-all"
+                    >
+                      <div className="text-[10px] text-text-dim mb-1 flex justify-between items-center">
+                        <span>{new Date().toLocaleTimeString()}</span>
+                        <span className="text-[9px] bg-accent/10 px-1 rounded-xs border border-accent/20">{hit.source?.toUpperCase() || t('source')}</span>
+                      </div>
+                      <div className="font-bold text-accent mb-1 flex justify-between items-center">
+                        <span>{hit.title}</span>
+                      </div>
+                      <div className={`text-text-dim text-[10px] ${hit.isFetching ? 'animate-pulse text-accent' : 'line-clamp-3'}`}>
+                        {hit.preview}
+                      </div>
+                      
+                      {/* Action Buttons Layer */}
+                      <div className="mt-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => handleReFetchMemory(hit)}
+                          disabled={hit.isFetching}
+                          className="flex-1 bg-accent/10 border border-accent/30 text-accent text-[8px] py-1 hover:bg-accent hover:text-black transition-all flex items-center justify-center gap-1 font-bold"
+                        >
+                          <RefreshCw size={8} /> {t('re_fetch')}
+                        </button>
+                        <button 
+                          onClick={() => setSelectedMemory(hit)}
+                          className="flex-1 border border-border text-text-dim text-[8px] py-1 hover:bg-white/10 transition-all flex items-center justify-center gap-1 font-bold"
+                        >
+                          <Maximize2 size={8} /> {t('details')}
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </CollapsiblePanel>
+
+              <CollapsiblePanel 
+                title="System Status" 
+                id="isStatusMinimized" 
+                icon={Settings2}
+              >
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-accent uppercase tracking-widest font-bold">Health Metrics</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00ff41] animate-pulse"></span>
+                  </div>
+                  <div className="flex justify-between font-mono text-[9px] text-text-dim"><span>CPU_LOAD:</span><span>14%</span></div>
+                  <div className="flex justify-between font-mono text-[9px] text-text-dim"><span>MEM_USED:</span><span>882MB</span></div>
+                  <div className="flex justify-between font-mono text-[9px] text-text-dim"><span>TEMP_CORE:</span><span>42°C</span></div>
+                  <div className="flex justify-between font-mono text-[9px] uppercase text-[8px] mt-1 border-t border-border/20 pt-1">
+                    <span className="text-text-main">{t('recursive_mode')}</span>
+                    <button 
+                      onClick={() => setIsFractalMode(!isFractalMode)}
+                      className={`px-1.5 border ${isFractalMode ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
+                    >
+                      {isFractalMode ? 'ENABLED' : 'DISABLED'}
+                    </button>
+                  </div>
+                  <div className="flex justify-between font-mono text-[9px] uppercase text-[8px] mt-1">
+                    <span className="text-text-main">{t('lobster_mode')}</span>
+                    <button 
+                      onClick={() => setIsLobsterMode(!isLobsterMode)}
+                      className={`px-1.5 border ${isLobsterMode ? 'bg-[#ff4d4d]/20 border-[#ff4d4d] text-[#ff4d4d]' : 'border-border text-text-dim'}`}
+                    >
+                      {isLobsterMode ? 'ACTIVE' : 'IDLE'}
+                    </button>
+                  </div>
+                  <div className="flex justify-between font-mono text-[9px] uppercase text-[8px] mt-1">
+                    <span className="text-text-main">{t('evolver_mode')}</span>
+                    <button 
+                      onClick={() => setIsEvolverMode(!isEvolverMode)}
+                      className={`px-1.5 border ${isEvolverMode ? 'bg-[#00ff9d]/20 border-[#00ff9d] text-[#00ff9d]' : 'border-border text-text-dim'}`}
+                    >
+                      {isEvolverMode ? 'ENABLED' : 'DISABLED'}
+                    </button>
+                  </div>
+                  <div className="flex justify-between font-mono text-[9px] uppercase text-[8px] mt-1">
+                    <span className="text-text-main">{t('gepa_protocol')}</span>
+                    <button 
+                      onClick={() => setIsGepaActive(!isGepaActive)}
+                      className={`px-1.5 border ${isGepaActive ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
+                    >
+                      {isGepaActive ? 'ACTIVE' : 'OFFLINE'}
+                    </button>
+                  </div>
+                  <div className="flex justify-between font-mono text-[9px] uppercase text-[8px] mt-1">
+                    <span className="text-text-main">{t('synaptic_pruning')}</span>
+                    <button 
+                      onClick={() => setIsPruningActive(!isPruningActive)}
+                      className={`px-1.5 border ${isPruningActive ? 'bg-accent/20 border-accent text-accent' : 'border-border text-text-dim'}`}
+                    >
+                      {isPruningActive ? 'READY' : 'STANDBY'}
+                    </button>
+                  </div>
+                  <div className="mt-2 text-[8px] font-mono opacity-30 break-all overflow-hidden h-3 text-text-dim">S-UUID: f81e282d-802e-40f3-a708-3a95c9688373</div>
+              </CollapsiblePanel>
 
          <SwarmMap />
 
-         <div 
-           style={{ height: isMutationMinimized ? '34px' : 'auto' }}
-           className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden transition-all duration-300"
+         <CollapsiblePanel 
+           title={t('mutation_engine')} 
+           id="isMutationMinimized" 
+           icon={Sparkles}
          >
-            <MiniPanelHeader title={t('mutation_engine')} minimized={isMutationMinimized} onToggle={() => setIsMutationMinimized(!isMutationMinimized)} icon={Sparkles} />
-            {!isMutationMinimized && (
-              <>
-                <div className="flex flex-col gap-1.5 font-mono text-[9px]">
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between text-text-dim uppercase">
-                      <span>{t('energy_processing')}</span>
-                      <span className="text-[#00ff9d]">{energyLevel}%</span>
+            <div className="flex flex-col gap-1.5 font-mono text-[9px]">
+              <div className="flex flex-col gap-1">
+                <div className="flex justify-between text-text-dim uppercase">
+                  <span>{t('energy_processing')}</span>
+                  <span className="text-[#00ff9d]">{energyLevel}%</span>
+                </div>
+                <div className="h-1 w-full bg-border rounded-full overflow-hidden">
+                  <motion.div 
+                    animate={{ width: `${energyLevel}%` }}
+                    className="h-full bg-[#00ff9d]"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-between border-t border-border/20 pt-1 text-text-dim uppercase">
+                <span>{t('iteration_cycle')}:</span>
+                <span className="text-text-main">GEN_{iterationCycle.toString().padStart(3, '0')}</span>
+              </div>
+              <div className="flex justify-between text-text-dim uppercase">
+                <span>{t('entropy_level')}:</span>
+                <span className="text-[#3dfff3]">0.428_SIGMA</span>
+              </div>
+            </div>
+            {isEvolverMode && (
+              <div className="mt-1 text-[8px] bg-[#00ff9d]/20 px-1.5 py-0.5 rounded-xs animate-pulse text-[#00ff9d] self-start font-bold uppercase tracking-widest">
+                {t('evolver_mode')} active
+              </div>
+            )}
+         </CollapsiblePanel>
+
+         <CollapsiblePanel 
+           title={t('workflow_engine')} 
+           id="isWorkflowMinimized" 
+           icon={Server}
+         >
+            <div className="flex flex-col gap-1 text-[9px] font-mono text-text-dim">
+              <div className="flex justify-between">
+                <span>{t('nodes_active')}:</span>
+                <span className={activeNodes > 0 ? "text-accent" : ""}>{activeNodes}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>{t('operator_ready')}:</span>
+                <span className={isLobsterMode ? "text-[#ff4d4d]" : ""}>{isLobsterMode ? "YES" : "NO"}</span>
+              </div>
+            </div>
+            <div className="h-1 w-full bg-border rounded-full overflow-hidden mt-1">
+              <motion.div 
+                animate={activeNodes > 0 ? { x: [-50, 100] } : { x: 0 }}
+                transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                className={`h-full w-10 ${activeNodes > 0 ? 'bg-accent' : 'bg-transparent'}`}
+              />
+            </div>
+         </CollapsiblePanel>
+
+         <CollapsiblePanel 
+           title={t('prediction_swarm')} 
+           id="isPredictionMinimized" 
+           icon={RefreshCw}
+         >
+            <div className="flex flex-col gap-1.5">
+              {swarmPredictions.length === 0 ? (
+                <div className="text-[9px] text-text-dim italic">Waiting for trajectory data...</div>
+              ) : (
+                swarmPredictions.map((pred, i) => (
+                  <div key={i} className="flex flex-col gap-1">
+                    <div className="flex justify-between text-[9px] uppercase font-mono">
+                      <span className="text-text-main">{pred.label}</span>
+                      <span className="text-accent">{(pred.prob * 100).toFixed(0)}%</span>
                     </div>
                     <div className="h-1 w-full bg-border rounded-full overflow-hidden">
                       <motion.div 
-                        animate={{ width: `${energyLevel}%` }}
-                        className="h-full bg-[#00ff9d]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pred.prob * 100}%` }}
+                        className="h-full bg-accent shadow-[0_0_8px_rgba(255,126,185,0.6)]"
                       />
                     </div>
                   </div>
-                  <div className="flex justify-between border-t border-border/20 pt-1 text-text-dim uppercase">
-                    <span>{t('iteration_cycle')}:</span>
-                    <span className="text-text-main">GEN_{iterationCycle.toString().padStart(3, '0')}</span>
-                  </div>
-                  <div className="flex justify-between text-text-dim uppercase">
-                    <span>{t('entropy_level')}:</span>
-                    <span className="text-[#3dfff3]">0.428_SIGMA</span>
-                  </div>
-                </div>
-                {isEvolverMode && (
-                  <div className="mt-1 text-[8px] bg-[#00ff9d]/20 px-1.5 py-0.5 rounded-xs animate-pulse text-[#00ff9d] self-start font-bold uppercase tracking-widest">
-                    {t('evolver_mode')} active
-                  </div>
-                )}
-              </>
-            )}
-         </div>
+                ))
+              )}
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[8px] text-text-dim uppercase font-mono opacity-50">
+              <RefreshCw size={8} className="animate-spin-slow" /> {t('trajectories')} active
+            </div>
+         </CollapsiblePanel>
 
-         <div 
-           style={{ height: isWorkflowMinimized ? '34px' : 'auto' }}
-           className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden transition-all duration-300"
+         <CollapsiblePanel 
+           title={t('neural_sources')} 
+           id="isSourcesMinimized" 
+           icon={Database}
          >
-            <MiniPanelHeader title={t('workflow_engine')} minimized={isWorkflowMinimized} onToggle={() => setIsWorkflowMinimized(!isWorkflowMinimized)} icon={Server} />
-            {!isWorkflowMinimized && (
-              <>
-                <div className="flex flex-col gap-1 text-[9px] font-mono text-text-dim">
-                  <div className="flex justify-between">
-                    <span>{t('nodes_active')}:</span>
-                    <span className={activeNodes > 0 ? "text-accent" : ""}>{activeNodes}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>{t('operator_ready')}:</span>
-                    <span className={isLobsterMode ? "text-[#ff4d4d]" : ""}>{isLobsterMode ? "YES" : "NO"}</span>
-                  </div>
-                </div>
-                <div className="h-1 w-full bg-border rounded-full overflow-hidden mt-1">
-                  <motion.div 
-                    animate={{ x: activeNodes > 0 ? [-50, 100] : 0 }}
-                    transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-                    className={`h-full w-10 ${activeNodes > 0 ? 'bg-accent' : 'bg-transparent'}`}
-                  />
-                </div>
-              </>
-            )}
-         </div>
-
-         <div 
-           style={{ height: isPredictionMinimized ? '34px' : 'auto' }}
-           className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden transition-all duration-300"
-         >
-            <MiniPanelHeader title={t('prediction_swarm')} minimized={isPredictionMinimized} onToggle={() => setIsPredictionMinimized(!isPredictionMinimized)} icon={RefreshCw} />
-            {!isPredictionMinimized && (
-              <>
-                <div className="flex flex-col gap-1.5">
-                  {swarmPredictions.length === 0 ? (
-                    <div className="text-[9px] text-text-dim italic">Waiting for trajectory data...</div>
-                  ) : (
-                    swarmPredictions.map((pred, i) => (
-                      <div key={i} className="flex flex-col gap-1">
-                        <div className="flex justify-between text-[9px] uppercase font-mono">
-                          <span className="text-text-main">{pred.label}</span>
-                          <span className="text-accent">{(pred.prob * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="h-1 w-full bg-border rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${pred.prob * 100}%` }}
-                            className="h-full bg-accent shadow-[0_0_8px_rgba(255,126,185,0.6)]"
-                          />
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-[8px] text-text-dim uppercase font-mono opacity-50">
-                  <RefreshCw size={8} className="animate-spin-slow" /> {t('trajectories')} active
-                </div>
-              </>
-            )}
-         </div>
-
-         <div 
-           style={{ height: isSourcesMinimized ? '34px' : 'auto' }}
-           className="bg-panel border border-border rounded-sm p-4 flex flex-col gap-2 shrink-0 overflow-hidden transition-all duration-300"
-         >
-            <MiniPanelHeader title={t('neural_sources')} minimized={isSourcesMinimized} onToggle={() => setIsSourcesMinimized(!isSourcesMinimized)} icon={Database} />
-            {!isSourcesMinimized && (
-              <div className="flex flex-col gap-1.5 font-mono text-[9px]">
-                {[
-                  { name: 'Goose', url: 'https://github.com/aaif-goose/goose' },
-                  { name: 'Agents', url: 'https://github.com/wshobson/agents' },
-                  { name: 'Neurite', url: 'https://github.com/satellitecomponent/Neurite' },
-                  { name: 'MiroFish', url: 'https://github.com/666ghj/MiroFish' },
-                  { name: 'n8n', url: 'https://github.com/n8n-io/n8n' },
-                  { name: 'OpenClaw', url: 'https://github.com/openclaw/openclaw' },
-                  { name: 'GEPA', url: 'https://github.com/gepa-ai/gepa' },
-                  { name: 'Evolver', url: 'https://github.com/EvoMap/evolver' },
-                  { name: 'TinyDev', url: 'https://github.com/cuneytozseker/TinyProgrammer' },
-                ].map((src, i) => (
-                  <a 
-                    key={i}
-                    href={src.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="flex justify-between items-center text-text-dim hover:text-accent transition-colors group border-b border-border/10 pb-1"
-                  >
-                    <span className="uppercase">{src.name}</span>
-                    <ExternalLink size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </a>
-                ))}
-              </div>
-            )}
-         </div>
+            <div className="flex flex-col gap-1.5 font-mono text-[9px]">
+              {[
+                { name: 'Goose', url: 'https://github.com/aaif-goose/goose' },
+                { name: 'Agents', url: 'https://github.com/wshobson/agents' },
+                { name: 'Neurite', url: 'https://github.com/satellitecomponent/Neurite' },
+                { name: 'MiroFish', url: 'https://github.com/666ghj/MiroFish' },
+                { name: 'n8n', url: 'https://github.com/n8n-io/n8n' },
+                { name: 'OpenClaw', url: 'https://github.com/openclaw/openclaw' },
+                { name: 'GEPA', url: 'https://github.com/gepa-ai/gepa' },
+                { name: 'Evolver', url: 'https://github.com/EvoMap/evolver' },
+                { name: 'TinyDev', url: 'https://github.com/cuneytozseker/TinyProgrammer' },
+              ].map((src, i) => (
+                <a 
+                  key={i}
+                  href={src.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="flex justify-between items-center text-text-dim hover:text-accent transition-colors group border-b border-border/10 pb-1"
+                >
+                  <span className="uppercase">{src.name}</span>
+                  <ExternalLink size={10} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                </a>
+              ))}
+            </div>
+         </CollapsiblePanel>
         </div>
 
         <footer 
-            style={{ height: isHudFooterMinimized ? '24px' : '40px' }}
-            className={`mt-auto flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest relative transition-all duration-300 overflow-hidden ${isHudFooterMinimized ? 'justify-center border-t-0 bg-accent/5' : ''}`}
+            style={{ height: panelStates.isHudFooterMinimized ? '24px' : '40px' }}
+            className={`mt-auto flex items-center gap-4 text-[10px] text-text-dim border-t border-border pt-2 font-mono uppercase tracking-widest relative transition-all duration-300 overflow-hidden ${panelStates.isHudFooterMinimized ? 'justify-center border-t-0 bg-accent/5' : ''}`}
           >
-            {isHudFooterMinimized ? (
+            {panelStates.isHudFooterMinimized ? (
               <button 
-                onClick={() => setIsHudFooterMinimized(false)}
+                onClick={() => setPanelState('isHudFooterMinimized', false)}
                 className="flex items-center gap-2 text-accent hover:scale-105 transition-transform font-bold text-[8px]"
               >
                 <Plus size={8} /> RESTORE_SYSTEM_INFO
@@ -2358,7 +2513,7 @@ export default function App() {
 
                 <div className="ml-auto">LOCALHOST // {new Date().toLocaleTimeString()}</div>
                 <button 
-                  onClick={() => setIsHudFooterMinimized(true)}
+                  onClick={() => setPanelState('isHudFooterMinimized', true)}
                   className="ml-2 p-1 hover:text-accent transition-colors opacity-30 hover:opacity-100"
                 >
                   <Minus size={10} />
